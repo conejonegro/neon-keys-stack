@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neon Keys Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #08041a;
+    --panel: #120a2a;
+    --panel-2: #1a1038;
+    --line: #2e1f55;
+    --text: #ece8ff;
+    --muted: #9a8fc4;
+    --cyan: #00f0ff;
+    --pink: #ff32d2;
+    --yellow: #ffe146;
+    --green: #5affa0;
+    --danger: #ff5577;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Outfit", system-ui, sans-serif;
+    background:
+      radial-gradient(circle at 15% -10%, #2a0d4a 0, transparent 45%),
+      radial-gradient(circle at 100% 0%, #062a40 0, transparent 40%),
+      var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+  @media (max-width: 860px) { .wrap { padding: 0 16px; } }
+  header { padding-top: 28px; padding-bottom: 8px; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  h1 {
+    margin: 0;
+    font-weight: 800;
+    font-size: 40px;
+    letter-spacing: 3px;
+    color: #fff;
+    text-shadow: 0 0 10px var(--pink), 0 0 28px var(--pink);
+  }
+  header p { margin: 4px 0 0; color: var(--muted); }
+  main { padding-top: 16px; padding-bottom: 60px; display: grid; gap: 24px; }
+  .card {
+    background: linear-gradient(180deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 20px;
+    min-width: 0;
+  }
+  .card h2 {
+    margin: 0 0 14px;
+    font-size: 15px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--cyan);
+    text-shadow: 0 0 10px rgba(0, 240, 255, .5);
+  }
+  .card h2 small { color: var(--muted); text-shadow: none; letter-spacing: 0; text-transform: none; font-weight: 400; margin-left: 8px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+  input, select, textarea {
+    width: 100%;
+    background: #0b0620;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 11px 12px;
+    font: inherit;
+    outline: none;
+  }
+  input:focus, select:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0, 240, 255, .15); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .upload {
+    margin-top: 10px;
+    border: 1px dashed var(--line);
+    border-radius: 10px;
+    padding: 12px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+    transition: border-color .2s, color .2s;
+  }
+  .upload:hover, .upload.drag { border-color: var(--pink); color: var(--text); }
+  .upload input { display: none; }
+  .buttons { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
+  button {
+    font: inherit;
+    font-weight: 600;
+    border-radius: 12px;
+    padding: 12px 18px;
+    cursor: pointer;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--text);
+    transition: transform .1s, box-shadow .2s, opacity .2s, border-color .2s, color .2s;
+  }
+  button:active { transform: scale(.98); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .primary {
+    flex: 1;
+    border: none;
+    color: #12021f;
+    background: linear-gradient(90deg, var(--cyan), var(--pink));
+    box-shadow: 0 0 18px rgba(255, 50, 210, .45);
+  }
+  .primary:hover:not(:disabled) { box-shadow: 0 0 28px rgba(255, 50, 210, .7); }
+  .ghost:hover:not(:disabled) { border-color: var(--cyan); }
+  .progress { margin-top: 18px; display: none; }
+  .progress.show { display: block; }
+  .bar { height: 10px; background: #0b0620; border-radius: 99px; overflow: hidden; border: 1px solid var(--line); }
+  .bar > div {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, var(--cyan), var(--pink));
+    box-shadow: 0 0 12px var(--pink);
+    transition: width .4s;
+  }
+  .stage { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .error { margin-top: 14px; color: var(--danger); font-size: 13px; white-space: pre-wrap; display: none; }
+  .error.show { display: block; }
+  .preview-wrap { margin-top: 18px; display: none; text-align: center; }
+  .preview-wrap.show { display: block; }
+  .preview-wrap img { width: 100%; max-width: 260px; border-radius: 14px; border: 1px solid var(--line); }
+  #creator[hidden] { display: none; }
+  .creator-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+  @media (max-width: 860px) { .creator-grid { grid-template-columns: 1fr; } }
+
+  /* Semana */
+  .week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 860px) { .week { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .day { background: #0b0620; border: 1px solid var(--line); border-radius: 12px; padding: 10px; min-height: 92px; }
+  .day.today { border-color: var(--cyan); box-shadow: 0 0 12px rgba(0, 240, 255, .25); }
+  .day .dname { font-size: 12px; color: var(--muted); text-transform: capitalize; }
+  .day .item { font-size: 12px; margin-top: 6px; line-height: 1.3; }
+  .day .item.pub { color: var(--green); }
+  .day .item.prog { color: var(--yellow); }
+  .day .free { font-size: 12px; color: #4a3d78; margin-top: 6px; }
+
+  /* Filtros y galería */
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .filters button { padding: 7px 14px; font-size: 13px; border-radius: 99px; }
+  .filters button.on { border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 10px rgba(0, 240, 255, .3); }
+  .filters .count { color: var(--muted); margin-left: 4px; }
+  .filters + .filters { margin-bottom: 18px; }
+  .group + .group { margin-top: 26px; }
+  .group h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: var(--pink);
+    text-shadow: 0 0 8px rgba(255, 50, 210, .45);
+  }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
+  .video { background: #0b0620; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; }
+  .video.publicado { opacity: .72; }
+  .video video { width: 100%; aspect-ratio: 9 / 16; display: block; background: #000; }
+  .video .meta { padding: 12px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+  .video .title { font-weight: 600; font-size: 15px; line-height: 1.25; }
+  .video .file { font-size: 11px; color: var(--muted); word-break: break-all; margin-top: 2px; }
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; }
+  .badge { font-size: 11px; padding: 3px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.ok { color: var(--green); border-color: rgba(90, 255, 160, .4); }
+  .badge.warn { color: var(--yellow); border-color: rgba(255, 225, 70, .4); }
+  .badge.ia { color: var(--pink); border-color: rgba(255, 50, 210, .5); }
+  .note { font-size: 12px; color: var(--yellow); }
+  .caption { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; font-size: 13px; line-height: 1.4; }
+  .caption .tags { color: var(--cyan); margin-top: 6px; word-break: break-word; }
+  .caption.missing { color: var(--muted); font-style: italic; }
+  .copy { width: 100%; padding: 9px; font-size: 13px; border-color: var(--cyan); color: var(--cyan); }
+  .copy.done { border-color: var(--green); color: var(--green); }
+  .status { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .status select, .status input { padding: 8px 10px; font-size: 13px; }
+  .status input[hidden] { display: none; }
+  .actions { display: flex; gap: 8px; margin-top: auto; }
+  .actions a, .actions button {
+    flex: 1;
+    text-align: center;
+    font-size: 13px;
+    padding: 8px;
+    border-radius: 9px;
+    text-decoration: none;
+  }
+  .actions a { color: #12021f; background: var(--cyan); font-weight: 600; }
+  .actions button:hover { border-color: var(--danger); color: var(--danger); }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+
+  /* Ideas */
+  .idea-add { display: grid; grid-template-columns: minmax(0, 1fr) 170px auto; gap: 8px; margin-bottom: 16px; }
+  @media (max-width: 860px) { .idea-add { grid-template-columns: 1fr; } }
+  .idea-add input, .idea-add select { padding: 9px 12px; font-size: 14px; }
+  .idea-add button { padding: 9px 16px; font-size: 14px; }
+  .idea-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  @media (max-width: 860px) { .idea-cols { grid-template-columns: 1fr; } }
+  .idea-cols h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--pink); text-shadow: 0 0 8px rgba(255, 50, 210, .45); }
+  .idea { background: #0b0620; border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 10px; font-size: 13px; }
+  .idea .t { font-weight: 600; font-size: 14px; }
+  .idea .g { color: var(--cyan); margin-top: 4px; }
+  .idea .d { color: var(--muted); margin-top: 6px; line-height: 1.4; }
+  .idea .n { color: var(--yellow); margin-top: 6px; font-size: 12px; }
+  .idea .ib { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+  .idea .ib button { padding: 6px 10px; font-size: 12px; border-radius: 8px; }
+  .idea .ib .cp { border-color: var(--cyan); color: var(--cyan); flex: 1; }
+  .idea .ib .cp.done, .idea .ib .ok:hover { border-color: var(--green); color: var(--green); }
+  .idea .ib .x:hover { border-color: var(--danger); color: var(--danger); }
+  .idea.hecho { opacity: .55; }
+  .idea.hecho .t { text-decoration: line-through; }
+  .idea.probado { opacity: .55; }
+  .idea.probado .t { text-decoration: line-through; }
+  .idea .g a { color: var(--cyan); word-break: break-all; }
+  .probar-add { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 170px auto; }
+  .show-done { margin-top: 6px; padding: 6px 12px; font-size: 12px; border-radius: 99px; }
+
+  /* Imágenes */
+  .images { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; }
+  .image { text-align: center; font-size: 12px; color: var(--muted); }
+  .image a { display: block; }
+  .image img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 50%; border: 1px solid var(--line); }
+  .image.main img { border-color: var(--cyan); box-shadow: 0 0 14px rgba(0, 240, 255, .4); }
+  .image span { display: block; margin-top: 6px; word-break: break-all; }
+</style>
+</head>
+<body>
+<header class="wrap">
+  <div>
+    <h1>NEON KEYS</h1>
+    <p>Lista de publicación para TikTok</p>
+  </div>
+  <button class="ghost" id="toggleCreator">＋ Crear video desde MIDI</button>
+</header>
+
+<main class="wrap">
+  <section class="card" id="creator" hidden>
+    <h2>Nuevo video de piano</h2>
+    <div class="creator-grid">
+      <div>
+        <label for="midi">Canción (MIDI)</label>
+        <select id="midi"></select>
+        <div class="hint" id="midiInfo"></div>
+        <label class="upload" id="drop">
+          <input type="file" id="file" accept=".mid,.midi">
+          Arrastra un .mid aquí o <u>elige un archivo</u>
+        </label>
+
+        <label for="titulo">Título</label>
+        <input id="titulo" placeholder="Marcha Turca">
+
+        <label for="subtitulo">Subtítulo / compositor</label>
+        <input id="subtitulo" placeholder="Mozart">
+
+        <div class="row">
+          <div>
+            <label for="inicio">Empieza en (seg)</label>
+            <input id="inicio" type="number" min="0" step="1" placeholder="Primera nota">
+          </div>
+          <div>
+            <label for="duracion">Duración (seg)</label>
+            <input id="duracion" type="number" min="5" step="1" value="62">
+          </div>
+        </div>
+        <div class="hint">TikTok paga videos de 62 s o más (duración + ~6.7 s de entrada y cierre). Para una "parte 2", pon dónde terminó la parte 1.</div>
+
+        <label for="t">Segundo para la vista previa</label>
+        <input id="t" type="number" min="0" step="1" value="15">
+
+        <div class="buttons">
+          <button class="ghost" id="previewBtn">Vista previa</button>
+          <button class="primary" id="renderBtn">Generar video</button>
+        </div>
+
+        <div class="progress" id="progress">
+          <div class="bar"><div id="barFill"></div></div>
+          <div class="stage"><span id="stage">Preparando…</span><span id="pct">0%</span></div>
+        </div>
+        <div class="error" id="error"></div>
+      </div>
+      <div class="preview-wrap" id="previewWrap">
+        <img id="previewImg" alt="Vista previa del video">
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Esta semana <small>Plan: 1 video al día, alternando formatos</small></h2>
+    <div class="week" id="week"></div>
+  </section>
+
+  <section class="card">
+    <h2>Ideas para lo que sigue <small>Los datos curiosos traen su prompt para la IA de video</small></h2>
+    <form class="idea-add" id="ideaForm">
+      <input id="ideaTitulo" placeholder="Nueva idea… (ej. Los caracoles duermen 3 años)" autocomplete="off">
+      <select id="ideaTipo">
+        <option value="datos">💡 Datos curiosos</option>
+        <option value="piano">🎹 Piano</option>
+        <option value="bolitas">🔵 Bolitas</option>
+        <option value="podcast">🎙️ Podcast</option>
+        <option value="caricatura">🐦 Caricatura</option>
+      </select>
+      <button class="ghost" type="submit">Agregar</button>
+    </form>
+    <div class="idea-cols" id="ideas"></div>
+    <button class="ghost show-done" id="toggleDone"></button>
+  </section>
+
+  <section class="card">
+    <h2>Por probar <small>Skills, librerías y herramientas que vimos y queremos probar</small></h2>
+    <form class="idea-add probar-add" id="probarForm">
+      <input id="probarTitulo" placeholder="¿Qué quieres probar? (ej. skill anatomy)" autocomplete="off">
+      <input id="probarEnlace" placeholder="Enlace (opcional)" autocomplete="off">
+      <select id="probarTipo">
+        <option value="skill">🧩 Skill de Claude</option>
+        <option value="libreria">📦 Librería</option>
+        <option value="otro">🔧 Otra herramienta</option>
+      </select>
+      <button class="ghost" type="submit">Agregar</button>
+    </form>
+    <div class="idea-cols" id="probar"></div>
+  </section>
+
+  <section class="card">
+    <h2>Mis videos</h2>
+    <div class="filters" id="estadoFilters"></div>
+    <div class="filters" id="filters"></div>
+    <div id="gallery"></div>
+  </section>
+
+  <section class="card">
+    <h2>Imágenes <small>Foto de perfil y propuestas</small></h2>
+    <div class="images" id="images"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let midis = [];
+let polling = null;
+
+const TYPES = [
+  ["piano", "🎹 Piano"],
+  ["datos", "💡 Datos curiosos"],
+  ["bolitas", "🔵 Bolitas"],
+  ["podcast", "🎙️ Podcast"],
+  ["caricatura", "🐦 Caricatura"],
+];
+const TYPE_ICON = Object.fromEntries(TYPES.map(([t, l]) => [t, l.split(" ")[0]]));
+const ESTADOS = [
+  ["pendientes", "Por subir"],
+  ["publicado", "Publicados"],
+  ["todos", "Todos"],
+];
+let videos = [];
+let filter = "todos";
+let estadoFilter = "pendientes";
+try {
+  filter = localStorage.getItem("filtro") || "todos";
+  estadoFilter = localStorage.getItem("filtroEstado") || "pendientes";
+} catch {}
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function showError(msg) {
+  $("error").textContent = msg || "";
+  $("error").classList.toggle("show", !!msg);
+}
+
+function formData() {
+  return {
+    midi: $("midi").value,
+    titulo: $("titulo").value.trim(),
+    subtitulo: $("subtitulo").value.trim(),
+    inicio: $("inicio").value,
+    duracion: $("duracion").value,
+    t: $("t").value,
+  };
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  return data;
+}
+
+function prettyName(file) {
+  return file.replace(/\.(midi?|mp4)$/i, "").replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function fmtTime(s) {
+  if (s == null) return "";
+  const m = Math.floor(s / 60), r = Math.round(s % 60);
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
+function isoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// ---------------------------------------------------------------- Crear video (formulario)
+
+async function loadMidis(select) {
+  midis = await api("/api/midis");
+  $("midi").innerHTML = midis.length
+    ? midis.map((m) => `<option value="${esc(m.name)}">${esc(prettyName(m.name))}</option>`).join("")
+    : `<option value="">Sube un MIDI para empezar</option>`;
+  if (select) $("midi").value = select;
+  updateMidiInfo();
+}
+
+function updateMidiInfo() {
+  const m = midis.find((x) => x.name === $("midi").value);
+  $("midiInfo").textContent = m && m.length ? `Duración de la canción: ${fmtTime(m.length)}` : "";
+}
+
+async function upload(file) {
+  showError("");
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const res = await api("/api/midis", { method: "POST", body: fd });
+    await loadMidis(res.name);
+    if (!$("titulo").value) $("titulo").value = prettyName(res.name);
+  } catch (e) {
+    showError(e.message);
+  }
+}
+
+function setBusy(busy) {
+  $("renderBtn").disabled = busy;
+  $("previewBtn").disabled = busy;
+}
+
+function watchJob(id) {
+  setBusy(true);
+  $("creator").hidden = false;
+  $("progress").classList.add("show");
+  clearInterval(polling);
+  polling = setInterval(async () => {
+    try {
+      const job = await api(`/api/jobs/${id}`);
+      $("barFill").style.width = `${job.progress}%`;
+      $("pct").textContent = `${Math.round(job.progress)}%`;
+      $("stage").textContent = job.stage;
+      if (job.status !== "running") {
+        clearInterval(polling);
+        setBusy(false);
+        if (job.status === "error") showError(job.log.join("\n"));
+        await loadVideos();
+      }
+    } catch (e) {
+      clearInterval(polling);
+      setBusy(false);
+      showError(e.message);
+    }
+  }, 1000);
+}
+
+// ---------------------------------------------------------------- Semana
+
+function renderWeek() {
+  const today = new Date();
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
+    const key = isoDate(d);
+    const items = videos.filter((v) => v.fecha === key && v.estado !== "listo");
+    const label = i === 0 ? "Hoy" : i === 1 ? "Mañana" : d.toLocaleDateString("es-MX", { weekday: "long", day: "numeric" });
+    days.push(`
+      <div class="day ${i === 0 ? "today" : ""}">
+        <div class="dname">${label}</div>
+        ${items.length ? items.map((v) => `
+          <div class="item ${v.estado === "publicado" ? "pub" : "prog"}">
+            ${TYPE_ICON[v.type] || ""} ${esc(v.titulo || prettyName(v.name))}${v.estado === "publicado" ? " ✓" : ""}
+          </div>`).join("") : `<div class="free">Libre</div>`}
+      </div>`);
+  }
+  $("week").innerHTML = days.join("");
+}
+
+// ---------------------------------------------------------------- Videos
+
+function captionText(v) {
+  return [v.descripcion, v.hashtags].filter(Boolean).join("\n\n");
+}
+
+function videoCard(v) {
+  const dur = v.duration != null ? fmtTime(v.duration) : "";
+  const caption = v.descripcion || v.hashtags
+    ? `<div class="caption">${esc(v.descripcion)}${v.hashtags ? `<div class="tags">${esc(v.hashtags)}</div>` : ""}</div>
+       <button class="copy" data-copy="${esc(v.name)}">📋 Copiar descripción y hashtags</button>`
+    : `<div class="caption missing">Sin descripción todavía. Pídesela a Claude.</div>`;
+  return `
+    <div class="video ${v.estado}">
+      <video src="${esc(v.url)}?v=${v.mtime}" controls preload="metadata" playsinline></video>
+      <div class="meta">
+        <div>
+          <div class="title">${v.carpeta === "pruebas" ? "🧪 " : ""}${esc(v.titulo || prettyName(v.name))}</div>
+          <div class="file">${esc(v.carpeta)}/${esc(v.name)} · ${(v.size / 1048576).toFixed(1)} MB</div>
+        </div>
+        <div class="badges">
+          ${dur ? `<span class="badge">${dur}</span>` : ""}
+          ${v.monetizable ? `<span class="badge ok">✓ Monetizable</span>` : `<span class="badge warn">Teaser · no paga</span>`}
+          ${v.ia ? `<span class="badge ia">Marcar IA al subir</span>` : ""}
+        </div>
+        ${v.nota ? `<div class="note">⚠️ ${esc(v.nota)}</div>` : ""}
+        ${caption}
+        <div class="status">
+          <select data-estado="${esc(v.name)}">
+            <option value="listo" ${v.estado === "listo" ? "selected" : ""}>Listo para subir</option>
+            <option value="programado" ${v.estado === "programado" ? "selected" : ""}>Programado</option>
+            <option value="publicado" ${v.estado === "publicado" ? "selected" : ""}>Publicado ✓</option>
+          </select>
+          <input type="date" data-fecha="${esc(v.name)}" value="${esc(v.fecha || "")}" ${v.estado === "listo" ? "hidden" : ""} aria-label="Fecha">
+        </div>
+        <div class="actions">
+          <a href="${esc(v.url)}" download>Descargar</a>
+          <button data-del="${esc(v.name)}">Borrar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function matchesEstado(v) {
+  if (estadoFilter === "todos") return true;
+  if (estadoFilter === "publicado") return v.estado === "publicado";
+  return v.estado !== "publicado";
+}
+
+function renderGallery() {
+  const pool = videos.filter(matchesEstado);
+  const count = (t) => pool.filter((v) => v.type === t).length;
+  $("estadoFilters").innerHTML = ESTADOS.map(([e, label]) => {
+    const n = videos.filter((v) => e === "todos" || (e === "publicado" ? v.estado === "publicado" : v.estado !== "publicado")).length;
+    return `<button data-estado-filter="${e}" class="${estadoFilter === e ? "on" : ""}">${label}<span class="count">${n}</span></button>`;
+  }).join("");
+  $("filters").innerHTML = [["todos", "Todos los tipos", pool.length], ...TYPES.map(([t, label]) => [t, label, count(t)])]
+    .map(([t, label, n]) => `<button data-filter="${t}" class="${filter === t ? "on" : ""}">${label}<span class="count">${n}</span></button>`)
+    .join("");
+  const groups = TYPES.filter(([t]) => (filter === "todos" || filter === t) && count(t));
+  $("gallery").innerHTML = groups.length ? groups.map(([t, label]) => `
+    <div class="group">
+      <h3>${label}</h3>
+      <div class="gallery">${pool.filter((v) => v.type === t).map(videoCard).join("")}</div>
+    </div>`).join("") : `<div class="empty">No hay videos aquí.</div>`;
+}
+
+async function loadVideos() {
+  videos = await api("/api/videos");
+  renderWeek();
+  renderGallery();
+}
+
+async function updateVideo(name, data) {
+  const entry = await api(`/api/videos/${encodeURIComponent(name)}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
+  });
+  const v = videos.find((x) => x.name === name);
+  if (v) {
+    Object.assign(v, entry);
+    if (entry.estado === "listo") delete v.fecha;
+  }
+  renderWeek();
+  renderGallery();
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+}
+
+// ---------------------------------------------------------------- Ideas
+
+let ideasDoc = { plantilla_prompt: "", ideas: [] };
+let showDone = false;
+
+function ideaPrompt(i) {
+  if (!i.escena || !ideasDoc.plantilla_prompt) return "";
+  return ideasDoc.plantilla_prompt.replace("{escena}", i.escena).replace("{sonidos}", i.sonidos || "");
+}
+
+function ideaCard(i) {
+  const prompt = ideaPrompt(i);
+  return `
+    <div class="idea ${i.estado}">
+      <div class="t">${esc(i.titulo)}</div>
+      ${i.gancho ? `<div class="g">“${esc(i.gancho)}”</div>` : ""}
+      ${i.dato ? `<div class="d">${esc(i.dato)}</div>` : ""}
+      ${i.nota ? `<div class="n">${esc(i.nota)}</div>` : ""}
+      <div class="ib">
+        ${prompt ? `<button class="cp" data-prompt="${esc(i.id)}">📋 Copiar prompt</button>` : ""}
+        <button class="ok" data-done="${esc(i.id)}">${i.estado === "hecho" ? "↺ Reabrir" : "✓ Hecha"}</button>
+        <button class="x" data-del-idea="${esc(i.id)}" aria-label="Borrar idea">✕</button>
+      </div>
+    </div>`;
+}
+
+function renderIdeas() {
+  const done = ideasDoc.ideas.filter((i) => i.estado === "hecho").length;
+  $("ideas").innerHTML = TYPES.map(([t, label]) => {
+    const list = ideasDoc.ideas.filter((i) => i.tipo === t && (showDone || i.estado !== "hecho"));
+    return `<div><h3>${label}</h3>${list.length ? list.map(ideaCard).join("") : `<div class="d" style="color:var(--muted);font-size:13px">Sin ideas pendientes.</div>`}</div>`;
+  }).join("");
+  $("toggleDone").textContent = showDone ? "Ocultar hechas" : `Ver hechas (${done})`;
+  $("toggleDone").hidden = !done;
+}
+
+async function loadIdeas() {
+  ideasDoc = await api("/api/ideas");
+  renderIdeas();
+}
+
+$("ideaForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const titulo = $("ideaTitulo").value.trim();
+  if (!titulo) return;
+  try {
+    const idea = await api("/api/ideas", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ titulo, tipo: $("ideaTipo").value }),
+    });
+    ideasDoc.ideas.unshift(idea);
+    $("ideaTitulo").value = "";
+    renderIdeas();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+$("toggleDone").addEventListener("click", () => { showDone = !showDone; renderIdeas(); });
+
+$("ideas").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  try {
+    if (b.dataset.prompt) {
+      await copyText(ideaPrompt(ideasDoc.ideas.find((i) => i.id === b.dataset.prompt)));
+      b.textContent = "✓ Copiado";
+      b.classList.add("done");
+      setTimeout(() => { b.textContent = "📋 Copiar prompt"; b.classList.remove("done"); }, 1800);
+    } else if (b.dataset.done) {
+      const idea = ideasDoc.ideas.find((i) => i.id === b.dataset.done);
+      const res = await api(`/api/ideas/${encodeURIComponent(idea.id)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ estado: idea.estado === "hecho" ? "idea" : "hecho" }),
+      });
+      Object.assign(idea, res);
+      renderIdeas();
+    } else if (b.dataset.delIdea) {
+      const idea = ideasDoc.ideas.find((i) => i.id === b.dataset.delIdea);
+      if (!confirm(`¿Borrar la idea "${idea.titulo}"?`)) return;
+      await api(`/api/ideas/${encodeURIComponent(idea.id)}`, { method: "DELETE" });
+      ideasDoc.ideas = ideasDoc.ideas.filter((i) => i.id !== idea.id);
+      renderIdeas();
+    }
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+// ---------------------------------------------------------------- Por probar
+
+const PROBAR_TIPOS = [["skill", "🧩 Skills de Claude"], ["libreria", "📦 Librerías"], ["otro", "🔧 Otras herramientas"]];
+let probarItems = [];
+
+function probarCard(i) {
+  return `
+    <div class="idea ${i.estado}">
+      <div class="t">${esc(i.titulo)}</div>
+      ${i.enlace ? `<div class="g"><a href="${esc(i.enlace)}" target="_blank" rel="noopener">${esc(i.enlace.replace(/^https?:\/\//, ""))}</a></div>` : ""}
+      ${i.nota ? `<div class="d">${esc(i.nota)}</div>` : ""}
+      <div class="ib">
+        <button class="ok" data-probado="${esc(i.id)}">${i.estado === "probado" ? "↺ Pendiente" : "✓ Ya lo probé"}</button>
+        <button class="x" data-del-probar="${esc(i.id)}" aria-label="Borrar">✕</button>
+      </div>
+    </div>`;
+}
+
+function renderProbar() {
+  $("probar").innerHTML = PROBAR_TIPOS.map(([t, label]) => {
+    // Lo pendiente primero; lo ya probado queda al final, tachado.
+    const list = probarItems.filter((i) => i.tipo === t)
+      .sort((a, b) => (a.estado === "probado") - (b.estado === "probado"));
+    return `<div><h3>${label}</h3>${list.length ? list.map(probarCard).join("") : `<div class="d" style="color:var(--muted);font-size:13px">Nada por ahora.</div>`}</div>`;
+  }).join("");
+}
+
+async function loadProbar() {
+  probarItems = (await api("/api/probar")).items;
+  renderProbar();
+}
+
+$("probarForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const titulo = $("probarTitulo").value.trim();
+  if (!titulo) return;
+  try {
+    const item = await api("/api/probar", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ titulo, enlace: $("probarEnlace").value.trim(), tipo: $("probarTipo").value }),
+    });
+    probarItems.unshift(item);
+    $("probarTitulo").value = "";
+    $("probarEnlace").value = "";
+    renderProbar();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+$("probar").addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  try {
+    if (b.dataset.probado) {
+      const item = probarItems.find((i) => i.id === b.dataset.probado);
+      const res = await api(`/api/probar/${encodeURIComponent(item.id)}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ estado: item.estado === "probado" ? "pendiente" : "probado" }),
+      });
+      Object.assign(item, res);
+      renderProbar();
+    } else if (b.dataset.delProbar) {
+      const item = probarItems.find((i) => i.id === b.dataset.delProbar);
+      if (!confirm(`¿Borrar "${item.titulo}"?`)) return;
+      await api(`/api/probar/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+      probarItems = probarItems.filter((i) => i.id !== item.id);
+      renderProbar();
+    }
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+// ---------------------------------------------------------------- Imágenes
+
+async function loadImages() {
+  const imgs = await api("/api/imagenes");
+  $("images").innerHTML = imgs.length ? imgs.map((im) => `
+    <div class="image ${im.name === "avatar-tiktok" ? "main" : ""}">
+      <a href="${esc(im.url)}" download><img src="${esc(im.url)}" alt="${esc(im.name)}" loading="lazy"></a>
+      <span>${im.name === "avatar-tiktok" ? "⭐ Foto de perfil actual" : esc(im.name.replace(/^avatar-/, ""))}</span>
+    </div>`).join("") : `<div class="empty">Sin imágenes.</div>`;
+}
+
+// ---------------------------------------------------------------- Eventos
+
+$("toggleCreator").addEventListener("click", () => { $("creator").hidden = !$("creator").hidden; });
+$("midi").addEventListener("change", updateMidiInfo);
+$("file").addEventListener("change", (e) => e.target.files[0] && upload(e.target.files[0]));
+
+const drop = $("drop");
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.add("drag");
+}));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.remove("drag");
+}));
+drop.addEventListener("drop", (e) => e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]));
+
+$("previewBtn").addEventListener("click", async () => {
+  showError("");
+  const btn = $("previewBtn");
+  btn.disabled = true;
+  btn.textContent = "Generando…";
+  try {
+    const res = await api("/api/preview", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(formData()),
+    });
+    $("previewImg").src = `${res.url}?${Date.now()}`;
+    $("previewWrap").classList.add("show");
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Vista previa";
+  }
+});
+
+$("renderBtn").addEventListener("click", async () => {
+  showError("");
+  $("barFill").style.width = "0";
+  $("pct").textContent = "0%";
+  $("stage").textContent = "Preparando…";
+  try {
+    const res = await api("/api/render", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(formData()),
+    });
+    watchJob(res.id);
+  } catch (e) {
+    showError(e.message);
+  }
+});
+
+$("filters").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-filter]")?.dataset.filter;
+  if (!t) return;
+  filter = t;
+  try { localStorage.setItem("filtro", t); } catch {}
+  renderGallery();
+});
+
+$("estadoFilters").addEventListener("click", (e) => {
+  const t = e.target.closest("[data-estado-filter]")?.dataset.estadoFilter;
+  if (!t) return;
+  estadoFilter = t;
+  try { localStorage.setItem("filtroEstado", t); } catch {}
+  renderGallery();
+});
+
+$("gallery").addEventListener("click", async (e) => {
+  const copyBtn = e.target.closest("[data-copy]");
+  if (copyBtn) {
+    const v = videos.find((x) => x.name === copyBtn.dataset.copy);
+    await copyText(captionText(v));
+    copyBtn.textContent = "✓ Copiado";
+    copyBtn.classList.add("done");
+    setTimeout(() => { copyBtn.textContent = "📋 Copiar descripción y hashtags"; copyBtn.classList.remove("done"); }, 1800);
+    return;
+  }
+  const name = e.target.dataset.del;
+  if (!name || !confirm(`¿Borrar ${name}?`)) return;
+  await api(`/api/videos/${encodeURIComponent(name)}`, { method: "DELETE" });
+  loadVideos();
+});
+
+$("gallery").addEventListener("change", async (e) => {
+  try {
+    if (e.target.dataset.estado) {
+      const estado = e.target.value;
+      const data = { estado };
+      const v = videos.find((x) => x.name === e.target.dataset.estado);
+      if (estado !== "listo" && !v.fecha) data.fecha = isoDate(new Date());
+      await updateVideo(e.target.dataset.estado, data);
+    } else if (e.target.dataset.fecha) {
+      await updateVideo(e.target.dataset.fecha, { fecha: e.target.value });
+    }
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+(async () => {
+  await loadVideos();
+  loadIdeas();
+  loadProbar();
+  loadImages();
+  await loadMidis();
+  const cur = await api("/api/jobs/current");
+  if (cur.id) watchJob(cur.id);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+{
+  "nombre": "Neon Keys",
+  "id": "neon-keys",
+  "colores": {
+    "fondo_arriba": "#080416",
+    "fondo_abajo": "#1A082C",
+    "principal": "#00F0FF",
+    "acento": "#FF32D2",
+    "texto": "#FFFFFF",
+    "halo_titulo": "#00DCFF",
+    "resaltado": "#FF78E6",
+    "secundarios": ["#FFE146", "#5AFFA0", "#FF8C3C", "#AA64FF"]
+  },
+  "fuentes": {
+    "titulos": { "archivo": "/System/Library/Fonts/Supplemental/Futura.ttc", "indice": 2 },
+    "texto": { "archivo": "/System/Library/Fonts/Avenir Next.ttc", "indice": 0 }
+  },
+  "logo": "logo.png",
+  "firma": "NEON KEYS",
+  "cierre": "Sígueme para más",
+  "fps": 30,
+  "formato": [1080, 1920]
+}

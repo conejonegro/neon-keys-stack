@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body { margin: 0; background: #000; overflow: hidden; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Prueba de estilo: agujero negro neón. Disco de acreción de partículas cian/magenta que gira más rápido
+// cerca del centro (como los planetas: Kepler), anillo de luz alrededor del horizonte, estrellas y una
+// cámara que se acerca. grabar.js llama a window.dibujar(t) para cada cuadro.
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const W = 1080, H = 1920;
+const PARTICULAS = 60000;
+const R_MIN = 1.6, R_MAX = 7.5;    // radio interior y exterior del disco
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+document.body.appendChild(renderer.domElement);
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(0x020008);
+const camara = new THREE.PerspectiveCamera(55, W / H, 0.1, 500);
+
+// Números pseudoaleatorios con semilla: el video sale igual cada vez
+let semilla = 7;
+const azar = () => (semilla = (semilla * 16807) % 2147483647) / 2147483647;
+
+// Estrellas
+{
+  const n = 4000, pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const u = azar() * 2 - 1, a = azar() * Math.PI * 2, r = 120 + azar() * 80;
+    const s = Math.sqrt(1 - u * u);
+    pos.set([Math.cos(a) * s * r, u * r, Math.sin(a) * s * r], i * 3);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  escena.add(new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xb9a8ff, size: 1.6, sizeAttenuation: false })));
+}
+
+// Horizonte de eventos: esfera negra que tapa lo que está detrás
+const horizonte = new THREE.Mesh(new THREE.SphereGeometry(1, 64, 32), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+escena.add(horizonte);
+
+// Anillo de fotones: siempre mira a la cámara
+const anillo = new THREE.Mesh(
+  new THREE.RingGeometry(1.0, 1.35, 128),
+  new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: 'varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: `varying vec2 vP;
+      void main(){
+        float r = length(vP);
+        float brillo = exp(-pow((r - 1.06) * 18.0, 2.0)) + 0.25 * exp(-pow((r - 1.15) * 7.0, 2.0));
+        vec3 c = mix(vec3(1.0, 0.35, 0.85), vec3(0.6, 0.95, 1.0), 0.5 + 0.5 * vP.y);
+        gl_FragColor = vec4(c * brillo * 0.5, 1.0);
+      }`,
+  })
+);
+escena.add(anillo);
+
+// Disco de acreción
+const radio = new Float32Array(PARTICULAS), angulo = new Float32Array(PARTICULAS);
+const altura = new Float32Array(PARTICULAS), tam = new Float32Array(PARTICULAS);
+for (let i = 0; i < PARTICULAS; i++) {
+  const u = azar();
+  radio[i] = R_MIN + Math.pow(u, 2.2) * (R_MAX - R_MIN);    // más denso cerca del centro
+  angulo[i] = azar() * Math.PI * 2;
+  const grosor = 0.04 + 0.05 * (radio[i] - R_MIN);
+  altura[i] = (azar() + azar() + azar() - 1.5) * grosor;
+  tam[i] = 0.6 + azar() * 1.4;
+}
+const geoDisco = new THREE.BufferGeometry();
+geoDisco.setAttribute('position', new THREE.BufferAttribute(new Float32Array(PARTICULAS * 3), 3));
+geoDisco.setAttribute('radio', new THREE.BufferAttribute(radio, 1));
+geoDisco.setAttribute('angulo', new THREE.BufferAttribute(angulo, 1));
+geoDisco.setAttribute('altura', new THREE.BufferAttribute(altura, 1));
+geoDisco.setAttribute('tam', new THREE.BufferAttribute(tam, 1));
+geoDisco.boundingSphere = new THREE.Sphere(new THREE.Vector3(), R_MAX + 1);
+
+const disco = new THREE.Points(geoDisco, new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { t: { value: 0 } },
+  vertexShader: `uniform float t;
+    attribute float radio, angulo, altura, tam;
+    varying vec3 vColor;
+    void main(){
+      float w = 2.6 * pow(radio, -1.5);                  // velocidad angular de Kepler
+      float a = angulo + w * t;
+      vec3 p = vec3(cos(a) * radio, altura, sin(a) * radio);
+      vec4 mv = modelViewMatrix * vec4(p, 1.0);
+      gl_Position = projectionMatrix * mv;
+      gl_PointSize = min(tam * 32.0 / -mv.z, 4.5);
+      // Color por distancia: blanco caliente adentro, cian, magenta y violeta afuera
+      float k = clamp((radio - ${R_MIN.toFixed(1)}) / ${(R_MAX - R_MIN).toFixed(1)}, 0.0, 1.0);
+      vec3 c = mix(vec3(0.85, 1.0, 1.0), vec3(0.0, 0.92, 1.0), smoothstep(0.0, 0.12, k));
+      c = mix(c, vec3(1.0, 0.17, 0.84), smoothstep(0.15, 0.45, k));
+      c = mix(c, vec3(0.35, 0.1, 0.9), smoothstep(0.5, 1.0, k));
+      // El lado que viene hacia la cámara brilla más (efecto Doppler)
+      float doppler = 0.65 + 0.55 * cos(a);
+      vColor = c * doppler * (1.0 - 0.5 * k) * 0.3;
+    }`,
+  fragmentShader: `varying vec3 vColor;
+    void main(){
+      float d = length(gl_PointCoord - 0.5);
+      if (d > 0.5) discard;
+      gl_FragColor = vec4(vColor * smoothstep(0.5, 0.0, d), 1.0);
+    }`,
+}));
+disco.rotation.z = 0.12;
+escena.add(disco);
+
+const compositor = new EffectComposer(renderer);
+compositor.addPass(new RenderPass(escena, camara));
+compositor.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.45, 0.3, 0.35));
+compositor.addPass(new OutputPass());
+
+const suave = x => x * x * (3 - 2 * x);
+
+window.dibujar = (t) => {
+  // La cámara se acerca y baja hacia el plano del disco mientras gira un poco
+  const k = suave(Math.min(1, t / 5));
+  const dist = 15 - 6 * k;
+  const giro = -0.5 + 0.35 * t;
+  const alto = 3.6 - 1.8 * k;
+  camara.position.set(Math.sin(giro) * dist, alto, Math.cos(giro) * dist);
+  camara.lookAt(0, 0.6 - 0.4 * k, 0);
+  anillo.lookAt(camara.position);
+  disco.material.uniforms.t.value = t;
+  compositor.render();
+};
+
+window.cargar = () => {};
+window.listo = true;
+</script>
+</body>
+</html>

@@ -1,0 +1,341 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body { margin: 0; background: #080416; overflow: hidden; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Intro de cine "¿SABÍAS QUÉ?" (MOTION.md): la cámara avanza por una calle synthwave de noche con lluvia,
+// pasa bajo el logo NK y junto a letreros neón; al final frena, sube, aparece el sol al fondo y cae el
+// título con un parpadeo de neón y un glitch corto. Letreros, textos, tiempos y sonido salen de intro.py.
+// grabar.js llama a window.dibujar(t); todo se calcula a partir de t (lluvia y ventanas con semilla fija).
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
+
+const W = 1080, H = 1920;
+const CIAN = 0x00f0ff, MAGENTA = 0xff32d2, AMARILLO = 0xffe146;
+const FONDO = 0x080416;
+const CALLE = 5.5;            // las fachadas empiezan a esta distancia del centro
+const X_LETRERO = 2.3;        // letreros que salen de las fachadas hacia la calle
+const ALTURA_CAMARA = 1.4;
+const FOV = 70;
+
+// Números al azar repetibles (mismo generador que piano.html)
+function azar(semilla) {
+  let a = semilla >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const suave = (a, b, x) => { const k = Math.min(1, Math.max(0, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.autoClear = false;
+document.body.appendChild(renderer.domElement);
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(FONDO);
+escena.fog = new THREE.Fog(FONDO, 14, 85);
+const camara = new THREE.PerspectiveCamera(FOV, W / H, 0.1, 300);
+
+// ------------------------------------------------------------------ cielo y sol al fondo de la calle
+const cielo = new THREE.Mesh(new THREE.PlaneGeometry(500, 160), new THREE.ShaderMaterial({
+  fog: false, depthWrite: false,
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `varying vec2 vUv;
+    void main(){
+      float h = vUv.y;
+      vec3 c = mix(vec3(0.42,0.05,0.38), vec3(0.03,0.016,0.086), smoothstep(0.0, 0.45, h));
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+}));
+cielo.position.set(0, 55, -150);
+escena.add(cielo);
+
+const sol = new THREE.Mesh(new THREE.CircleGeometry(10, 64), new THREE.ShaderMaterial({
+  fog: false,
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `varying vec2 vUv;
+    void main(){
+      vec3 c = mix(vec3(1.0,0.15,0.6), vec3(1.0,0.78,0.25), vUv.y);
+      float franja = step(0.5, fract(vUv.y * 14.0)) + step(0.55, vUv.y);
+      if (franja < 0.5 && vUv.y < 0.55) discard;
+      gl_FragColor = vec4(c * 0.5, 1.0);
+    }`,
+}));
+sol.position.set(0, 6.5, -140);
+escena.add(sol);
+
+// ------------------------------------------------------------------ calle mojada: espejo + rejilla
+const espejo = new Reflector(new THREE.PlaneGeometry(2 * CALLE, 320), {
+  textureWidth: W / 2, textureHeight: H / 2, color: 0x3a3450, clipBias: 0.003,
+});
+espejo.rotation.x = -Math.PI / 2;
+espejo.position.set(0, 0, -100);
+escena.add(espejo);
+
+const CELDA = 1.6;
+const rejilla = new THREE.Mesh(new THREE.PlaneGeometry(240, 320), new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { color: { value: new THREE.Color(MAGENTA) } },
+  vertexShader: `varying vec3 vMundo;
+    void main(){ vec4 m = modelMatrix * vec4(position, 1.0); vMundo = m.xyz; gl_Position = projectionMatrix * viewMatrix * m; }`,
+  fragmentShader: `uniform vec3 color; varying vec3 vMundo;
+    void main(){
+      vec2 c = vMundo.xz / ${CELDA.toFixed(2)};
+      vec2 paso = fwidth(c);
+      vec2 d = abs(fract(c - 0.5) - 0.5) / paso;
+      float linea = 1.0 - smoothstep(0.6, 1.6, min(d.x, d.y));
+      float lejos = 1.0 - smoothstep(0.05, 0.18, max(paso.x, paso.y));
+      float niebla = 1.0 - smoothstep(20.0, 80.0, length(vMundo.xz - cameraPosition.xz));
+      gl_FragColor = vec4(color * 0.6, linea * lejos * niebla * 0.55);
+    }`,
+}));
+rejilla.rotation.x = -Math.PI / 2;
+rejilla.position.set(0, 0.01, -100);
+escena.add(rejilla);
+
+// ------------------------------------------------------------------ edificios
+function texturaVentanas(semilla) {
+  const r = azar(semilla);
+  const lienzo = document.createElement('canvas');
+  lienzo.width = 256; lienzo.height = 512;
+  const g = lienzo.getContext('2d');
+  g.fillStyle = '#0c0719';
+  g.fillRect(0, 0, 256, 512);
+  const tonos = ['#00f0ff', '#ff32d2', '#ffd27a', '#8a6bff'];
+  for (let fy = 0; fy < 16; fy++) for (let fx = 0; fx < 8; fx++) {
+    if (r() > 0.28) continue;
+    g.globalAlpha = 0.25 + r() * 0.45;
+    g.fillStyle = tonos[Math.floor(r() * tonos.length)];
+    g.fillRect(fx * 32 + 8, fy * 32 + 9, 16, 14);
+  }
+  const tx = new THREE.CanvasTexture(lienzo);
+  tx.colorSpace = THREE.SRGBColorSpace;
+  tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+  return tx;
+}
+const ventanas = [0, 1, 2, 3].map(k => texturaVentanas(101 + k * 37));
+
+function construirEdificios() {
+  const r = azar(7);
+  for (const lado of [-1, 1]) {
+    let z = 14;
+    while (z > -52) {
+      const fondo = 3 + r() * 5, ancho = 4 + r() * 5, alto = 7 + r() * 22;
+      const tx = ventanas[Math.floor(r() * 4)].clone();
+      tx.repeat.set(fondo / 4, alto / 8);
+      tx.needsUpdate = true;
+      const edificio = new THREE.Mesh(new THREE.BoxGeometry(ancho, alto, fondo),
+        new THREE.MeshBasicMaterial({ map: tx, color: 0xb0a8c8 }));
+      edificio.position.set(lado * (CALLE + ancho / 2), alto / 2, z - fondo / 2);
+      escena.add(edificio);
+      // Bordes neón del lado de la calle
+      const color = r() < 0.5 ? CIAN : MAGENTA;
+      const xf = lado * CALLE, z1 = z, z2 = z - fondo;
+      const borde = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(xf, 0, z1), new THREE.Vector3(xf, alto, z1),
+        new THREE.Vector3(xf, 0, z2), new THREE.Vector3(xf, alto, z2),
+        new THREE.Vector3(xf, alto, z1), new THREE.Vector3(xf, alto, z2),
+      ]), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.5 }));
+      escena.add(borde);
+      // Franjas neón horizontales en algunas fachadas
+      if (r() < 0.3) {
+        const franja = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.08, fondo * 0.9),
+          new THREE.MeshBasicMaterial({ color: r() < 0.5 ? CIAN : MAGENTA }));
+        franja.position.set(lado * (CALLE - 0.03), 2.2 + r() * Math.min(10, alto - 3), z - fondo / 2);
+        escena.add(franja);
+      }
+      z -= fondo + 0.3 + r() * 1.2;
+    }
+  }
+}
+construirEdificios();
+
+// ------------------------------------------------------------------ lluvia
+const GOTAS = 2400, CAJA_Z = 34, ALTO_LLUVIA = 14;
+const ra = azar(99);
+const gotas = Array.from({ length: GOTAS }, () => ({ x: (ra() - 0.5) * 2 * CALLE, z: ra() * CAJA_Z, fase: ra() * ALTO_LLUVIA, v: 18 + ra() * 6 }));
+const posLluvia = new Float32Array(GOTAS * 6);
+const geoLluvia = new THREE.BufferGeometry();
+geoLluvia.setAttribute('position', new THREE.BufferAttribute(posLluvia, 3));
+const lluvia = new THREE.LineSegments(geoLluvia, new THREE.LineBasicMaterial({
+  color: 0x9fc4ff, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false,
+}));
+lluvia.frustumCulled = false;
+escena.add(lluvia);
+
+function moverLluvia(t, zc) {
+  for (let i = 0; i < GOTAS; i++) {
+    const g = gotas[i];
+    const y = ALTO_LLUVIA - ((g.fase + t * g.v) % ALTO_LLUVIA);
+    const z = zc + 2 - ((((g.z - zc) % CAJA_Z) + CAJA_Z) % CAJA_Z);
+    posLluvia.set([g.x, y, z, g.x + 0.03, y + 0.45, z + 0.06], i * 6);
+  }
+  geoLluvia.attributes.position.needsUpdate = true;
+}
+
+// ------------------------------------------------------------------ cámara
+// Avanza a 4.2 u/s, frena durante la subida hasta 1 u/s y sigue así. z(t) se integra con pasos finos
+// (sigue siendo función solo de t).
+let cfg = null;
+function velocidad(t) {
+  const [a, b] = cfg.subida;
+  return 4.2 + (1.0 - 4.2) * suave(a, b, t);
+}
+function zCamara(t) {
+  const pasos = Math.max(1, Math.ceil(t * 200));
+  let z = 6, dt = t / pasos;
+  for (let i = 0; i < pasos; i++) z -= velocidad((i + 0.5) * dt) * dt;
+  return z;
+}
+
+// ------------------------------------------------------------------ letreros
+const letreros = [];
+const tanMedioH = Math.tan(THREE.MathUtils.degToRad(FOV / 2)) * W / H;
+const tanMedioV = Math.tan(THREE.MathUtils.degToRad(FOV / 2));
+
+async function textura(url) {
+  const tx = await new THREE.TextureLoader().loadAsync(url);
+  tx.colorSpace = THREE.SRGBColorSpace;
+  return tx;
+}
+
+async function construirLetreros(datos) {
+  for (const L of cfg.letreros) {
+    const tx = await textura(datos.texturas[L.id]);
+    const alto = L.ancho * tx.image.height / tx.image.width;
+    const malla = new THREE.Mesh(new THREE.PlaneGeometry(L.ancho, alto), new THREE.MeshBasicMaterial({
+      map: tx, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+      color: new THREE.Color(1, 1, 1),
+    }));
+    // Sale de cuadro justo en L.t: por el lado si está en una fachada, por arriba si cuelga al centro
+    const x = L.lado * X_LETRERO;
+    const salida = L.lado === 0 ? (L.y - ALTURA_CAMARA) / tanMedioV : (X_LETRERO - L.ancho / 2) / tanMedioH;
+    malla.position.set(x, L.y, zCamara(L.t) - salida);
+    escena.add(malla);
+    // Soporte que lo une con la fachada (o cables al techo para el del centro)
+    const soporte = L.lado === 0
+      ? new THREE.Mesh(new THREE.BoxGeometry(2 * CALLE, 0.05, 0.05), new THREE.MeshBasicMaterial({ color: 0x2a2140 }))
+      : new THREE.Mesh(new THREE.BoxGeometry(CALLE - X_LETRERO - L.ancho / 2, 0.06, 0.06), new THREE.MeshBasicMaterial({ color: 0x2a2140 }));
+    soporte.position.set(L.lado === 0 ? 0 : L.lado * (CALLE + X_LETRERO + L.ancho / 2) / 2, L.y + alto / 2 + 0.05, malla.position.z);
+    escena.add(soporte);
+    letreros.push({ ...L, malla });
+  }
+}
+
+// Parpadeo de neón repetible: el letrero de "?" falla de vez en cuando
+function parpadeo(t, semilla) {
+  const r = azar(semilla + Math.floor(t * 14));
+  return r() < 0.12 ? 0.25 : 1;
+}
+
+// ------------------------------------------------------------------ capas 2D (título y marca)
+const hud = new THREE.Scene();
+const camaraHud = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0, 1);
+const planoHud = new THREE.PlaneGeometry(1, 1);
+
+function capaScreen(tx, centroY) {
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthTest: false, depthWrite: false,
+    blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneMinusDstColorFactor, blendDst: THREE.OneFactor,
+    uniforms: { mapa: { value: tx }, fuerza: { value: 0 }, escala: { value: 1 }, centro: { value: 1 - 2 * centroY / H } },
+    vertexShader: `uniform float escala, centro; varying vec2 vUv;
+      void main(){ vUv = uv; vec2 p = position.xy * 2.0; p.y -= centro; p *= escala; p.y += centro; gl_Position = vec4(p, 0.0, 1.0); }`,
+    fragmentShader: `uniform sampler2D mapa; uniform float fuerza; varying vec2 vUv;
+      void main(){ gl_FragColor = vec4(texture2D(mapa, vUv).rgb * fuerza, 1.0); }`,
+  });
+  const malla = new THREE.Mesh(planoHud, mat);
+  hud.add(malla);
+  return malla;
+}
+let capaTitulo = null, capaMarca = null;
+
+// ------------------------------------------------------------------ posproceso: brillo + glitch corto
+const compositor = new EffectComposer(renderer);
+compositor.addPass(new RenderPass(escena, camara));
+compositor.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.42, 0.35, 0.4));
+const glitch = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, fuerza: { value: 0 }, semilla: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float fuerza, semilla; varying vec2 vUv;
+    float h(float n){ return fract(sin(n) * 43758.5453); }
+    void main(){
+      float banda = floor(vUv.y * 38.0);
+      float mueve = step(0.6, h(banda + semilla)) * (h(banda * 1.7 + semilla) - 0.5) * 0.08 * fuerza;
+      vec2 uv = vec2(vUv.x + mueve, vUv.y);
+      float d = 0.012 * fuerza;
+      gl_FragColor = vec4(texture2D(tDiffuse, uv + vec2(d, 0.0)).r, texture2D(tDiffuse, uv).g,
+                          texture2D(tDiffuse, uv - vec2(d, 0.0)).b, 1.0);
+    }`,
+});
+compositor.addPass(glitch);
+compositor.addPass(new OutputPass());
+
+// ------------------------------------------------------------------ cuadro
+window.dibujar = (t) => {
+  const [s0, s1] = cfg.subida;
+  const sube = suave(s0, s1 + 0.4, t);
+  const z = zCamara(t);
+  camara.position.set(Math.sin(t * 0.7) * 0.12, ALTURA_CAMARA + 1.8 * sube, z);
+  camara.lookAt(0, ALTURA_CAMARA + 0.2 + 2.0 * sube, z - 12);
+
+  moverLluvia(t, z);
+  for (const L of letreros) {
+    // Los letreros lejanos aparecen poco a poco (no se amontonan al inicio)
+    const d = z - L.malla.position.z;
+    const luz = (1 - suave(9, 20, d)) * (L.id === 'logo' ? 0.55 : 0.85);
+    L.malla.material.color.setScalar(luz * (L.id === 'pregunta' ? parpadeo(t, 5) : 1));
+  }
+
+  // Título: se enciende como neón (parpadeo) y "cae" de un poco más grande a su tamaño
+  const tt = t - cfg.titulo;
+  const encendido = tt < 0 ? 0 : tt < 0.06 ? 1 : tt < 0.12 ? 0.15 : tt < 0.18 ? 0.9 : tt < 0.24 ? 0.3 : 1;
+  if (capaTitulo) {
+    capaTitulo.material.uniforms.fuerza.value = encendido;
+    capaTitulo.material.uniforms.escala.value = tt < 0 ? 1 : 1 + 0.14 * Math.exp(-tt * 12);
+    capaMarca.material.uniforms.fuerza.value = suave(cfg.titulo + 0.3, cfg.titulo + 0.9, t);
+  }
+  glitch.uniforms.fuerza.value = tt >= 0 && tt < 0.28 ? 1 - tt / 0.28 : 0;
+  glitch.uniforms.semilla.value = Math.floor(t * 30) * 13.1;
+
+  renderer.clear();
+  compositor.render();
+  renderer.render(hud, camaraHud);
+};
+
+window.cargar = async (datos) => {
+  cfg = datos.cfg;
+  await construirLetreros(datos);
+  const cargar = async (url) => {
+    const tx = await new THREE.TextureLoader().loadAsync(url);
+    tx.colorSpace = THREE.NoColorSpace;
+    tx.minFilter = THREE.LinearFilter;
+    tx.generateMipmaps = false;
+    return tx;
+  };
+  capaTitulo = capaScreen(await cargar(datos.capas.titulo), 640);
+  capaMarca = capaScreen(await cargar(datos.capas.marca), 1640);
+};
+window.listo = true;
+</script>
+</body>
+</html>

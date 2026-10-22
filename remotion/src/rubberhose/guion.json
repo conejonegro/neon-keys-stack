@@ -1,0 +1,25 @@
+{
+  "silabasPorSegundo": 9,
+  "frases": [
+    {
+      "inicio": 0.3,
+      "fin": 2.9,
+      "habla": 1.5,
+      "texto": "ACABO DE VER\n*LA SUSTANCIA*…"
+    },
+    {
+      "inicio": 3.1,
+      "fin": 6.4,
+      "habla": 2.2,
+      "texto": "¡ESTÁ *FUERA*\n*DE LO NORMAL*!\nBIZARRA E INCREÍBLE.",
+      "objeto": "jeringa"
+    },
+    {
+      "inicio": 6.6,
+      "fin": 9.9,
+      "habla": 2.2,
+      "texto": "*10 DE 10.*\nNO VUELVO A VER\nMI ESPALDA IGUAL.",
+      "objeto": "diez"
+    }
+  ]
+}

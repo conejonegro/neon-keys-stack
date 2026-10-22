@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="es" data-resolution="portrait">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1080, height=1920" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <!--
+      Cineclub Forever · Temporada de Terror (prueba de 15 s, 1080×1920, 30 fps).
+      Collage de recortes con la tipografía y el color de cada cartel de referencia (ver ../script.md).
+      Todo se mueve "en dos": la línea de tiempo interna se lleva al múltiplo de 1/15 s más cercano.
+    -->
+    <style>
+      @font-face { font-family: "Rye"; src: url("fuentes/Rye-Regular.ttf"); }
+      @font-face { font-family: "Pinyon"; src: url("fuentes/PinyonScript-Regular.ttf"); }
+      @font-face { font-family: "Fraktur"; src: url("fuentes/UnifrakturMaguntia-Book.ttf"); }
+      @font-face { font-family: "Anton"; src: url("fuentes/Anton-Regular.ttf"); }
+      @font-face { font-family: "Shrikhand"; src: url("fuentes/Shrikhand-Regular.ttf"); }
+      @font-face { font-family: "Cormorant"; src: url("fuentes/CormorantGaramond.ttf"); font-weight: 300 700; }
+      @font-face { font-family: "Montserrat"; src: url("fuentes/Montserrat-Bold.ttf"); font-weight: 700; }
+      @font-face { font-family: "Montserrat"; src: url("fuentes/Montserrat-SemiBold.ttf"); font-weight: 600; }
+      @font-face { font-family: "Lato"; src: url("fuentes/Lato-Regular.ttf"); font-weight: 400; }
+
+      :root {
+        --negro: #0a0a0a;
+        --ambar: #fcbb00;      /* Cineclub: solo en la apertura y el cierre */
+        --lila: #d888f2;       /* Rosemary's Baby */
+        --lila-sombra: #2a0f33;
+        --menta: #9fe0a8;      /* Possession */
+        --rojo: #c8141f;       /* The Substance */
+        --tinta: #141315;
+        --texto: #ededed;
+        --texto-suave: #99a1af;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { margin: 0; width: 1080px; height: 1920px; overflow: hidden; background: var(--negro); }
+      #root { position: relative; width: 1080px; height: 1920px; overflow: hidden; background: var(--negro); }
+      #film { position: absolute; inset: -12px; }
+      .clip { position: absolute; inset: 12px; overflow: hidden; }
+      .fondo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      .abs { position: absolute; left: 0; top: 0; }
+      .t { position: absolute; left: 0; width: 1080px; text-align: center; white-space: nowrap; line-height: 1; }
+      .t span { display: inline-block; }
+      .lleno { position: absolute; left: 0; top: 0; width: 1080px; height: 1920px; pointer-events: none; }
+
+      /* apertura */
+      #s0-haz { background: radial-gradient(ellipse 70% 42% at 50% 50%, rgba(255, 236, 200, 0.22), rgba(255, 236, 200, 0.06) 55%, transparent 75%); }
+      #s0-marca { top: 820px; font: 600 34px "Montserrat"; letter-spacing: 0.32em; color: var(--ambar); }
+      #s0-presenta { top: 880px; font: 150px "Pinyon"; color: #fff; line-height: 1.25; }
+
+      /* Rosemary */
+      .lila { color: var(--lila); text-shadow: 5px 6px 0 var(--lila-sombra); }
+      #s1-una { top: 215px; font: 150px "Pinyon"; line-height: 1.3; }
+      #s1-temporada { top: 440px; font: 150px "Rye"; letter-spacing: -0.01em; }
+
+      /* Nosferatu */
+      #s2-lema { top: 262px; font: 600 34px "Cormorant"; letter-spacing: 0.3em; color: #e8e4dc; }
+      #s2-terror { top: 330px; font: 196px "Fraktur"; color: #f4f1ea; line-height: 1.15; }
+
+      /* Possession */
+      #s3-todo { top: 1215px; font: 150px "Shrikhand"; color: var(--menta); line-height: 1.15; }
+      #s3-octubre { top: 1375px; font: 168px "Shrikhand"; color: var(--menta); line-height: 1.15; }
+
+      /* The Substance */
+      #s4-cada { top: 1225px; font: 46px "Lato"; color: #1b1a19; letter-spacing: 0.02em; }
+      #s4-clasico { top: 1290px; font: 158px "Anton"; color: #121212; letter-spacing: 0.005em; }
+      #s4-miedo { top: 1455px; font: 158px "Anton"; color: var(--rojo); letter-spacing: 0.005em; }
+
+      /* patrocinador */
+      #s5-por { top: 1196px; font: 600 30px "Montserrat"; letter-spacing: 0.3em; color: #f2f0ea; }
+
+      /* cierre */
+      #s6-tag { top: 1110px; font: 600 34px "Montserrat"; letter-spacing: 0.3em; color: var(--ambar); }
+      #s6-cta { top: 1190px; font: 700 66px "Montserrat"; color: #fff; letter-spacing: -0.01em; }
+      #s6-sitio { top: 1295px; font: 40px "Lato"; color: var(--texto-suave); }
+      #s6-luz { background: linear-gradient(100deg, transparent 0%, rgba(255, 236, 200, 0) 38%, rgba(255, 236, 200, 0.28) 50%, rgba(255, 236, 200, 0) 62%, transparent 100%); mix-blend-mode: screen; }
+
+      /* acabado de película */
+      .grano { position: absolute; inset: 0; width: 1080px; height: 1920px; mix-blend-mode: overlay; opacity: 0; }
+      #vineta { background: radial-gradient(ellipse 78% 62% at 50% 48%, transparent 55%, rgba(0, 0, 0, 0.55) 100%); }
+      #parpadeo { background: #000; opacity: 0; }
+      #destello { background: #fff7e6; opacity: 0; }
+      .rasgo { position: absolute; left: 0; top: 0; width: 1080px; height: 1920px; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="15" data-width="1080" data-height="1920">
+      <div id="film">
+        <!-- 0 · apertura: el proyector se enciende -->
+        <div id="s0" class="clip" data-start="0" data-duration="1.6" data-track-index="0">
+          <img class="fondo" src="assets/papel-negro.jpg" alt="" />
+          <div id="s0-haz" class="lleno"></div>
+          <div id="s0-marca" class="t">CINECLUB FOREVER</div>
+          <div id="s0-presenta" class="t">presenta</div>
+        </div>
+
+        <!-- 1 · Rosemary's Baby: perfil y letra victoriana lila -->
+        <div id="s1" class="clip" data-start="1.6" data-duration="2.4" data-track-index="0">
+          <img class="fondo" src="assets/papel-negro.jpg" alt="" />
+          <img id="s1-perfil" class="abs" src="assets/rosemary-perfil.png" alt="" />
+          <div id="s1-una" class="t lila">Una nueva</div>
+          <div id="s1-temporada" class="t lila">TEMPORADA</div>
+        </div>
+
+        <!-- 2 · Nosferatu: la sombra en el arco, letra gótica -->
+        <div id="s2" class="clip" data-start="4" data-duration="2.4" data-track-index="0">
+          <img class="fondo" src="assets/papel-negro.jpg" alt="" />
+          <img id="s2-foto" class="abs" src="assets/nosferatu.png" alt="" />
+          <div id="s2-lema" class="t">ENTRÉGATE A LA OSCURIDAD</div>
+          <div id="s2-terror" class="t">de Terror</div>
+        </div>
+
+        <!-- 3 · Possession: el rostro en la franja azul, letra setentera menta -->
+        <div id="s3" class="clip" data-start="6.4" data-duration="2.2" data-track-index="0">
+          <img class="fondo" src="assets/papel-negro.jpg" alt="" />
+          <img id="s3-foto" class="abs" src="assets/possession.png" alt="" />
+          <div id="s3-todo" class="t">TODO</div>
+          <div id="s3-octubre" class="t">OCTUBRE</div>
+        </div>
+
+        <!-- 4 · The Substance: rostro movido, tira de ojos, letra condensada -->
+        <div id="s4" class="clip" data-start="8.6" data-duration="2.2" data-track-index="0">
+          <img class="fondo" src="assets/papel-crema.jpg" alt="" />
+          <img id="s4-eco" class="abs" src="assets/substance-cara.png" alt="" />
+          <img id="s4-cara" class="abs" src="assets/substance-cara.png" alt="" />
+          <img id="s4-ojos" class="abs" src="assets/substance-ojos.png" alt="" />
+          <div id="s4-cada" class="t">cada semana</div>
+          <div id="s4-clasico" class="t">UN CLÁSICO</div>
+          <div id="s4-miedo" class="t">DEL MIEDO</div>
+        </div>
+
+        <!-- 5 · patrocinador: Rosemary y las manos sobre papel gris -->
+        <div id="s5" class="clip" data-start="10.8" data-duration="1.8" data-track-index="0">
+          <img class="fondo" src="assets/papel-gris.jpg" alt="" />
+          <img id="s5-ai" class="abs" src="assets/mano-ai.png" alt="" />
+          <img id="s5-ad" class="abs" src="assets/mano-ad.png" alt="" />
+          <img id="s5-bi" class="abs" src="assets/mano-bi.png" alt="" />
+          <img id="s5-bd" class="abs" src="assets/mano-bd.png" alt="" />
+          <img id="s5-foto" class="abs" src="assets/rosemary-carriola.png" alt="" />
+          <img id="s5-pedazo" class="abs" src="assets/pedazo-negro.png" alt="" />
+          <div id="s5-por" class="t">PATROCINADO POR</div>
+          <img id="s5-logo" class="abs" src="assets/true-love.png" alt="True Love Design" />
+        </div>
+
+        <!-- 6 · cierre: logo de Cineclub -->
+        <div id="s6" class="clip" data-start="12.6" data-duration="2.4" data-track-index="0">
+          <img class="fondo" src="assets/papel-negro.jpg" alt="" />
+          <img id="s6-logo" class="abs" src="assets/cineclub-logo.png" alt="Cineclub Forever" />
+          <div id="s6-luz" class="lleno"></div>
+          <div id="s6-tag" class="t">TEMPORADA DE TERROR</div>
+          <div id="s6-cta" class="t">Más cine en Cineclub Forever</div>
+          <div id="s6-sitio" class="t">cineclub-forever.vercel.app</div>
+        </div>
+
+        <!-- cortes de papel rasgado: dos mitades que se cierran y se vuelven a abrir -->
+        <img id="rn-arriba" class="rasgo" src="assets/rasgo-negro-arriba.png" alt="" />
+        <img id="rn-abajo" class="rasgo" src="assets/rasgo-negro-abajo.png" alt="" />
+        <img id="rg-arriba" class="rasgo" src="assets/rasgo-gris-arriba.png" alt="" />
+        <img id="rg-abajo" class="rasgo" src="assets/rasgo-gris-abajo.png" alt="" />
+      </div>
+
+      <audio id="musica" data-start="0" data-duration="15" data-track-index="2" data-volume="1" src="assets/terror.wav"></audio>
+
+      <!-- acabado: grano (6 cuadros), viñeta, parpadeo del proyector y destello de corte -->
+      <div id="acabado" class="lleno">
+        <img class="grano" src="assets/grano-0.png" alt="" />
+        <img class="grano" src="assets/grano-1.png" alt="" />
+        <img class="grano" src="assets/grano-2.png" alt="" />
+        <img class="grano" src="assets/grano-3.png" alt="" />
+        <img class="grano" src="assets/grano-4.png" alt="" />
+        <img class="grano" src="assets/grano-5.png" alt="" />
+        <div id="vineta" class="lleno"></div>
+        <div id="parpadeo" class="lleno"></div>
+        <div id="destello" class="lleno"></div>
+      </div>
+    </div>
+
+    <script>
+      const DUR = 15;
+      const $ = (s) => document.querySelector(s);
+      const hsh = (n) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+
+      // parte un texto en letras (para que entren una por una)
+      function letras(sel) {
+        const el = $(sel);
+        el.innerHTML = [...el.textContent].map((c) => `<span>${c === " " ? "&nbsp;" : c}</span>`).join("");
+        return el.querySelectorAll("span");
+      }
+
+      // coloca una imagen por su centro con un ancho dado
+      function colocar(sel, cx, cy, ancho, rot = 0) {
+        const el = $(sel);
+        el.style.width = ancho + "px";
+        gsap.set(el, { x: cx, y: cy, xPercent: -50, yPercent: -50, rotation: rot, transformOrigin: "50% 50%" });
+        return el;
+      }
+
+      // ---------- la animación: línea interna que se lleva "en dos" ----------
+      const A = gsap.timeline({ paused: true });
+      const entra = { opacity: 0, y: 34 };
+      const suave = { opacity: 1, y: 0, duration: 0.6, ease: "power2.out" };
+
+      // 0 · apertura
+      gsap.set("#s0-haz", { opacity: 0 });
+      A.to("#s0-haz", { keyframes: [{ opacity: 0.9, duration: 0.07 }, { opacity: 0.2, duration: 0.07 }, { opacity: 1, duration: 0.07 }] }, 0.05);
+      A.fromTo("#s0-marca", entra, suave, 0.2);
+      A.fromTo("#s0-presenta", entra, { ...suave, duration: 0.7 }, 0.42);
+      A.fromTo(["#s0-marca", "#s0-presenta"], { scale: 1 }, { scale: 1.04, duration: 1.6, ease: "none" }, 0);
+
+      // 1 · Rosemary
+      colocar("#s1-perfil", 560, 1170, 920, -2);
+      A.fromTo("#s1-perfil", { y: 1300, scale: 1.1, opacity: 0 }, { y: 1170, scale: 1, opacity: 1, duration: 0.55, ease: "power3.out" }, 1.6);
+      A.to("#s1-perfil", { scale: 1.06, duration: 1.85, ease: "none" }, 2.15);
+      gsap.set("#s1-una", { rotation: -5 });
+      A.fromTo("#s1-una", entra, suave, 1.9);
+      A.fromTo(letras("#s1-temporada"), { opacity: 0, y: 40, rotation: (i) => -8 + 16 * hsh(i) },
+        { opacity: 1, y: 0, rotation: 0, duration: 0.5, ease: "back.out(1.6)", stagger: 0.05 }, 2.1);
+
+      // 2 · Nosferatu: empujón lento hacia la sombra
+      colocar("#s2-foto", 540, 1190, 1010, 1.2);
+      gsap.set("#s2-foto", { transformOrigin: "30% 45%", filter: "grayscale(1) contrast(1.12) brightness(0.95)" });
+      A.fromTo("#s2-foto", { scale: 1 }, { scale: 1.12, duration: 2.4, ease: "sine.inOut" }, 4.0);
+      A.fromTo("#s2-lema", entra, suave, 4.35);
+      // "de Terror" se enciende como vela: aparece, titubea y se queda
+      A.fromTo("#s2-terror", { opacity: 0, scale: 1.06 }, { keyframes: [
+        { opacity: 1, scale: 1.02, duration: 0.14 }, { opacity: 0.25, duration: 0.07 }, { opacity: 1, duration: 0.07 },
+        { opacity: 0.6, duration: 0.07 }, { opacity: 1, scale: 1, duration: 0.3 }] }, 4.55);
+
+      // 3 · Possession: la franja azul baja y "golpea"; las letras entran ondulando
+      colocar("#s3-foto", 540, 735, 700, -1);
+      A.fromTo("#s3-foto", { y: 300, opacity: 0 }, { y: 735, opacity: 1, duration: 0.5, ease: "back.out(1.3)" }, 6.4);
+      A.to("#s3-foto", { scale: 1.05, duration: 1.7, ease: "none" }, 6.9);
+      A.fromTo(letras("#s3-todo"), { opacity: 0, y: 70, scale: 0.6, rotation: (i) => (i % 2 ? 12 : -12) },
+        { opacity: 1, y: 0, scale: 1, rotation: 0, duration: 0.55, ease: "elastic.out(1, 0.55)", stagger: 0.07 }, 6.75);
+      A.fromTo(letras("#s3-octubre"), { opacity: 0, y: 70, scale: 0.6, rotation: (i) => (i % 2 ? -12 : 12) },
+        { opacity: 1, y: 0, scale: 1, rotation: 0, duration: 0.55, ease: "elastic.out(1, 0.55)", stagger: 0.07 }, 7.05);
+
+      // 4 · The Substance: la cara entra de golpe y tiembla; la tira de ojos se estampa
+      colocar("#s4-cara", 540, 690, 1120, -1.5);
+      colocar("#s4-eco", 560, 690, 1120, -1.5);
+      gsap.set("#s4-eco", { opacity: 0.32, filter: "blur(7px)" });
+      A.fromTo(["#s4-cara", "#s4-eco"], { scale: 1.18 }, { scale: 1, duration: 0.35, ease: "power4.out" }, 8.6);
+      A.to("#s4-eco", { x: 600, duration: 2.2, ease: "none" }, 8.6);
+      colocar("#s4-ojos", 690, 1110, 470, 3);
+      A.fromTo("#s4-ojos", { opacity: 0, scale: 1.7, rotation: -6 }, { opacity: 1, scale: 1, rotation: 3, duration: 0.2, ease: "power4.out" }, 9.0);
+      A.fromTo("#s4-cada", entra, suave, 9.2);
+      A.fromTo("#s4-clasico", { opacity: 0, scaleY: 1.6, y: 20 }, { opacity: 1, scaleY: 1, y: 0, duration: 0.35, ease: "power3.out" }, 9.38);
+      A.fromTo("#s4-miedo", { opacity: 0, scaleY: 1.6, y: 20 }, { opacity: 1, scaleY: 1, y: 0, duration: 0.35, ease: "power3.out" }, 9.62);
+
+      // 5 · patrocinador: las manos se estiran desde las orillas hacia Rosemary
+      colocar("#s5-foto", 540, 720, 520, 0);
+      A.fromTo("#s5-foto", { y: 640, opacity: 0, scale: 1.08 }, { y: 720, opacity: 1, scale: 1, duration: 0.45, ease: "power3.out" }, 10.8);
+      const manos = [
+        ["#s5-ai", 175, 330, 420, "0% 0%", -220, -200],
+        ["#s5-ad", 905, 360, 400, "100% 0%", 220, -220],
+        ["#s5-bi", 160, 860, 330, "0% 50%", -240, 0],
+        ["#s5-bd", 920, 840, 340, "100% 50%", 240, 0],
+      ];
+      manos.forEach(([sel, cx, cy, w, origen, dx, dy], i) => {
+        colocar(sel, cx, cy, w, 0);
+        gsap.set(sel, { transformOrigin: origen });
+        A.fromTo(sel, { x: cx + dx, y: cy + dy, scale: 0.75 }, { x: cx, y: cy, scale: 1, duration: 1.6, ease: "sine.out" }, 10.85 + i * 0.06);
+        A.fromTo(sel, { rotation: -3 }, { rotation: 3, duration: 0.4, ease: "sine.inOut", repeat: 3, yoyo: true }, 10.85);
+      });
+      colocar("#s5-pedazo", 540, 1360, 760, -1.5);
+      A.fromTo("#s5-pedazo", { opacity: 0, y: 1440, rotation: 4 }, { opacity: 1, y: 1360, rotation: -1.5, duration: 0.35, ease: "power3.out" }, 11.05);
+      A.fromTo("#s5-por", entra, suave, 11.2);
+      colocar("#s5-logo", 540, 1395, 440, 0);
+      // el logo aparece "pixel a pixel": escalones de opacidad y tamaño
+      A.fromTo("#s5-logo", { opacity: 0, scale: 0.86 }, { opacity: 1, scale: 1, duration: 0.4, ease: "steps(4)" }, 11.4);
+
+      // 6 · cierre
+      colocar("#s6-logo", 540, 790, 520, 0);
+      A.fromTo("#s6-logo", { opacity: 0, scale: 0.94 }, { opacity: 1, scale: 1, duration: 0.7, ease: "power2.out" }, 12.65);
+      A.to("#s6-logo", { scale: 1.04, duration: 1.65, ease: "none" }, 13.35);
+      A.fromTo("#s6-luz", { x: -1100 }, { x: 1100, duration: 0.9, ease: "power1.inOut" }, 12.75);
+      A.fromTo("#s6-tag", entra, suave, 12.85);
+      A.fromTo("#s6-cta", entra, suave, 13.0);
+      A.fromTo("#s6-sitio", entra, suave, 13.15);
+
+      // ---------- cortes ----------
+      gsap.set(".rasgo", { y: 0 });
+      gsap.set(["#rn-arriba", "#rg-arriba"], { y: -1100 });
+      gsap.set(["#rn-abajo", "#rg-abajo"], { y: 1100 });
+      // la hoja se cierra (antes del corte) y se rasga hacia afuera (después)
+      function rasgo(T, color, giro) {
+        const arr = `#r${color}-arriba`, aba = `#r${color}-abajo`;
+        A.fromTo(arr, { y: -1100, rotation: 0 }, { y: 0, duration: 0.2, ease: "power2.in" }, T - 0.24);
+        A.fromTo(aba, { y: 1100, rotation: 0 }, { y: 0, duration: 0.2, ease: "power2.in" }, T - 0.24);
+        A.to(arr, { y: -1250, rotation: -4 * giro, duration: 0.5, ease: "power2.in" }, T + 0.04);
+        A.to(aba, { y: 1250, rotation: 3 * giro, duration: 0.5, ease: "power2.in" }, T + 0.04);
+      }
+      rasgo(4.0, "n", 1);
+      rasgo(8.6, "n", -1);
+      rasgo(10.8, "g", 1);
+
+      // destellos de proyector en los cortes "de luz" (2 cuadros) y fundido final
+      [1.6, 6.4, 12.6].forEach((T) => {
+        A.set("#destello", { opacity: 0.85 }, T);
+        A.set("#destello", { opacity: 0.25 }, T + 2 / 30);
+        A.set("#destello", { opacity: 0 }, T + 4 / 30);
+      });
+      A.to("#parpadeo", { opacity: 1, duration: 0.2, ease: "power1.in" }, 14.8);
+
+      // ---------- acabado que depende del cuadro: grano, temblor y parpadeo ----------
+      const granos = document.querySelectorAll(".grano");
+      function acabado(t) {
+        const pose = Math.floor(t * 15 + 1e-6);
+        granos.forEach((g, i) => (g.style.opacity = i === pose % 6 ? 0.2 : 0));
+        gsap.set("#film", { x: (hsh(pose) - 0.5) * 3, y: (hsh(pose + 99) - 0.5) * 3 });
+        if (t < 14.8) gsap.set("#parpadeo", { opacity: 0.02 + 0.05 * hsh(pose + 7) });
+      }
+
+      // ---------- reloj de HyperFrames ----------
+      const reloj = { t: 0 };
+      const tl = gsap.timeline({ paused: true });
+      tl.to(reloj, {
+        t: DUR, duration: DUR, ease: "none",
+        onUpdate: () => {
+          const q = Math.floor(reloj.t * 15 + 1e-6) / 15;   // "en dos": una pose cada 2 cuadros
+          A.seek(q, false);
+          acabado(q);
+        },
+      }, 0);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body { margin: 0; background: #0b0c10; overflow: hidden; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Bolitas "armonía": cientos de bolitas brillantes con física real (bolitas.mjs) cayendo en un tazón
+// invisible sobre una plataforma. Color por altura; cada bolita destella cuando suena su golpe.
+// grabar.js llama a window.cargar(datos) y luego a window.dibujar(t) para cada cuadro.
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const W = 1080, H = 1920;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(0x0b0c10);
+// Reflejos suaves de "estudio" para que las bolitas brillen como plástico pulido
+const pmrem = new THREE.PMREMGenerator(renderer);
+escena.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+escena.environmentIntensity = 0.55;
+
+const camara = new THREE.PerspectiveCamera(42, W / H, 0.1, 100);
+
+escena.add(new THREE.HemisphereLight(0xbfc8ff, 0x201828, 0.6));
+const luz = new THREE.DirectionalLight(0xffffff, 2.2);
+luz.position.set(3, 9, 4);
+luz.castShadow = true;
+luz.shadow.mapSize.set(2048, 2048);
+Object.assign(luz.shadow.camera, { left: -4, right: 4, top: 4, bottom: -4, near: 1, far: 20 });
+luz.shadow.bias = -0.0005;
+luz.shadow.radius = 4;
+escena.add(luz);
+
+// Colores por altura (como la referencia): ligeras azul arriba → magenta abajo; pesadas verde arriba → naranja abajo
+const AZUL = new THREE.Color(0x4a55ff), MAGENTA = new THREE.Color(0xff2bb8);
+const VERDE = new THREE.Color(0x8cff2e), NARANJA = new THREE.Color(0xff6a00);
+
+let datos = null, bolitas = null, ultimoGolpe = null;
+const tmp = new THREE.Object3D();
+const color = new THREE.Color();
+
+function construir(d) {
+  datos = d;
+  const { rDisco } = d.tazon;
+  const disco = new THREE.Mesh(
+    new THREE.CylinderGeometry(rDisco, rDisco, 0.12, 96),
+    new THREE.MeshStandardMaterial({ color: 0x2c2d33, roughness: 0.55, metalness: 0.1 }),
+  );
+  disco.position.y = -0.06;
+  disco.receiveShadow = true;
+  escena.add(disco);
+
+  const n = d.bolitas.length;
+  bolitas = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(1, 24, 16),
+    new THREE.MeshPhysicalMaterial({ roughness: 0.16, metalness: 0.0, clearcoat: 1, clearcoatRoughness: 0.08 }),
+    n,
+  );
+  bolitas.castShadow = true;
+  bolitas.receiveShadow = true;
+  bolitas.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  for (let i = 0; i < n; i++) bolitas.setColorAt(i, AZUL);
+  escena.add(bolitas);
+
+  // Para el destello: momentos en que suena cada bolita
+  ultimoGolpe = Array.from({ length: n }, () => []);
+  for (const [t, i] of d.suenan || d.golpes) ultimoGolpe[i].push(t);
+}
+
+window.dibujar = (t) => {
+  const k = Math.min(datos.cuadros.length - 1, Math.round(t * datos.fps));
+  const pos = datos.cuadros[k];
+  const vivas = pos.length / 3;
+  const alto = datos.tazon.alto;
+
+  for (let i = 0; i < datos.bolitas.length; i++) {
+    const b = datos.bolitas[i];
+    if (i >= vivas) {
+      tmp.scale.setScalar(0);
+      tmp.updateMatrix();
+      bolitas.setMatrixAt(i, tmp.matrix);
+      continue;
+    }
+    tmp.position.set(pos[3 * i], pos[3 * i + 1], pos[3 * i + 2]);
+    tmp.scale.setScalar(b.radio);
+    tmp.updateMatrix();
+    bolitas.setMatrixAt(i, tmp.matrix);
+
+    const h = THREE.MathUtils.clamp(pos[3 * i + 1] / (alto * 0.75), 0, 1);
+    if (b.tipo === 'pesada') color.copy(NARANJA).lerp(VERDE, h);
+    else color.copy(MAGENTA).lerp(AZUL, h);
+    // Destello al sonar: se aclara y brilla un instante
+    let flash = 0;
+    for (const tg of ultimoGolpe[i]) if (tg <= t && t - tg < 0.4) flash = Math.max(flash, Math.exp(-(t - tg) * 9));
+    color.multiplyScalar(1 + 0.7 * flash);
+    bolitas.setColorAt(i, color);
+  }
+  bolitas.instanceMatrix.needsUpdate = true;
+  bolitas.instanceColor.needsUpdate = true;
+
+  // Cámara elevada que gira despacio alrededor del tazón y se acerca un poco
+  const giro = 0.6 + t * 0.12;
+  const dist = 7.4 - t * 0.2;
+  camara.position.set(Math.sin(giro) * dist, 4.4, Math.cos(giro) * dist);
+  camara.lookAt(0, 1.15, 0);
+
+  compositor.render();
+};
+
+const compositor = new EffectComposer(renderer);
+compositor.addPass(new RenderPass(escena, camara));
+compositor.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.22, 0.35, 0.8));
+compositor.addPass(new OutputPass());
+
+window.cargar = (d) => construir(d);
+window.listo = true;
+</script>
+</body>
+</html>

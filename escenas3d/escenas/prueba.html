@@ -1,0 +1,197 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body { margin: 0; background: #05010f; overflow: hidden; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Prueba 3D: notas neón que llegan desde el horizonte hasta un teclado, con piso synthwave y brillo.
+// grabar.js llama a window.dibujar(t) para cada cuadro; nada depende del reloj real.
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const W = 1080, H = 1920;
+const CIAN = 0x00f0ff, MAGENTA = 0xff2bd6;
+const VELOCIDAD = 6;          // unidades por segundo a las que avanzan las notas
+const ANCHO_TECLADO = 6.4;    // ancho máximo del teclado en unidades 3D
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+document.body.appendChild(renderer.domElement);
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(0x05010f);
+escena.fog = new THREE.Fog(0x05010f, 12, 60);
+
+const camara = new THREE.PerspectiveCamera(62, W / H, 0.1, 200);
+
+escena.add(new THREE.AmbientLight(0x6a4cff, 0.6));
+const luz = new THREE.DirectionalLight(0xffffff, 1.2);
+luz.position.set(2, 6, 4);
+escena.add(luz);
+
+// Sol retro al fondo
+const sol = new THREE.Mesh(
+  new THREE.CircleGeometry(9, 64),
+  new THREE.ShaderMaterial({
+    fog: false,
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: `varying vec2 vUv;
+      void main(){
+        vec3 c = mix(vec3(1.0,0.15,0.6), vec3(1.0,0.75,0.2), vUv.y);
+        float franja = step(0.5, fract(vUv.y * 14.0)) + step(0.55, vUv.y);
+        if (franja < 0.5 && vUv.y < 0.55) discard;
+        gl_FragColor = vec4(c * 0.5, 1.0);
+      }`,
+  })
+);
+sol.position.set(0, 4, -70);
+escena.add(sol);
+
+// Piso synthwave: rejilla magenta que se desplaza hacia la cámara
+// Piso synthwave: rejilla dibujada con shader para que las líneas salgan suavizadas, todas iguales
+// y se desvanezcan a lo lejos antes de amontonarse (con líneas de 1 px parpadeaban y hacían moiré)
+const CELDA = 1.6;
+const piso = new THREE.Mesh(
+  new THREE.PlaneGeometry(240, 240),
+  new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: { avance: { value: 0 }, color: { value: new THREE.Color(MAGENTA) } },
+    vertexShader: `varying vec3 vMundo;
+      void main(){
+        vec4 m = modelMatrix * vec4(position, 1.0);
+        vMundo = m.xyz;
+        gl_Position = projectionMatrix * viewMatrix * m;
+      }`,
+    fragmentShader: `uniform float avance; uniform vec3 color; varying vec3 vMundo;
+      void main(){
+        vec2 c = vec2(vMundo.x, vMundo.z - avance) / ${CELDA.toFixed(2)};
+        vec2 paso = fwidth(c);
+        vec2 d = abs(fract(c - 0.5) - 0.5) / paso;          // distancia a la línea, en píxeles
+        float linea = 1.0 - smoothstep(0.6, 1.6, min(d.x, d.y));
+        // Donde un cuadro mide pocos píxeles las líneas se apagan, así no hay moiré en el horizonte
+        float densidad = max(paso.x, paso.y);
+        float lejos = 1.0 - smoothstep(0.05, 0.18, densidad);
+        float niebla = 1.0 - smoothstep(25.0, 70.0, length(vMundo.xz - cameraPosition.xz));
+        gl_FragColor = vec4(color * 0.65, linea * lejos * niebla);
+      }`,
+  })
+);
+piso.rotation.x = -Math.PI / 2;
+piso.position.y = -0.02;
+escena.add(piso);
+
+// Teclado y notas: se arman con los datos de un MIDI (window.cargar) o con un arpegio de prueba
+const esNegra = n => [1, 3, 6, 8, 10].includes(n % 12);
+const teclas = new Map();
+let notas = [];
+let blancas = [], anchoBlanca = 0.42, anchoTeclado = 0;
+
+function xDeNota(n) {
+  if (!esNegra(n)) return -anchoTeclado / 2 + (blancas.indexOf(n) + 0.5) * anchoBlanca;
+  return xDeNota(n - 1) + anchoBlanca / 2;
+}
+
+function construir(datos) {
+  let notaMin = datos.notaMin, notaMax = datos.notaMax;
+  if (esNegra(notaMin)) notaMin--;
+  if (esNegra(notaMax)) notaMax++;
+  blancas = [];
+  for (let n = notaMin; n <= notaMax; n++) if (!esNegra(n)) blancas.push(n);
+  // El teclado siempre mide lo mismo en pantalla; con más octavas, las teclas son más delgadas
+  anchoBlanca = Math.min(0.42, ANCHO_TECLADO / blancas.length);
+  anchoTeclado = blancas.length * anchoBlanca;
+
+  for (let n = notaMin; n <= notaMax; n++) {
+    const negra = esNegra(n);
+    const geo = negra
+      ? new THREE.BoxGeometry(anchoBlanca * 0.58, 0.16, 0.95)
+      : new THREE.BoxGeometry(anchoBlanca * 0.94, 0.1, 1.5);
+    const mat = new THREE.MeshStandardMaterial({
+      color: negra ? 0x0b0618 : 0x6e6a96, roughness: 0.4, metalness: 0.1,
+      emissive: 0x000000,
+    });
+    const tecla = new THREE.Mesh(geo, mat);
+    tecla.position.set(xDeNota(n), negra ? 0.1 : 0.05, negra ? 0.475 : 0.75);
+    escena.add(tecla);
+    teclas.set(n, tecla);
+  }
+
+  // Barra de luz donde las notas tocan el teclado
+  const linea = new THREE.Mesh(
+    new THREE.BoxGeometry(anchoTeclado + 0.2, 0.03, 0.04),
+    new THREE.MeshBasicMaterial({ color: 0xff7ae8 })
+  );
+  linea.position.set(0, 0.12, -0.02);
+  escena.add(linea);
+
+  notas = datos.notas.map(d => ({ ...d, color: d.mano === 'L' ? MAGENTA : CIAN }));
+  for (const nota of notas) {
+    const ancho = (esNegra(nota.n) ? 0.55 : 0.8) * anchoBlanca;
+    nota.mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(ancho, 0.12, 1),
+      new THREE.MeshBasicMaterial({ color: nota.color })
+    );
+    nota.mesh.position.x = xDeNota(nota.n);
+    nota.mesh.position.y = 0.12;
+    escena.add(nota.mesh);
+  }
+}
+
+function datosDePrueba() {
+  const lista = [];
+  const arpegio = [72, 76, 79, 84, 79, 76, 74, 77, 81, 77, 74, 71, 72, 76, 79, 84];
+  arpegio.forEach((n, i) => lista.push({ n, ini: 0.6 + i * 0.22, dur: 0.18, mano: 'R' }));
+  [[60, 0.6], [65, 1.48], [67, 2.36], [60, 3.24]].forEach(([n, ini]) =>
+    lista.push({ n, ini, dur: 0.8, mano: 'L' }));
+  return { notaMin: 60, notaMax: 84, notas: lista };
+}
+
+const compositor = new EffectComposer(renderer);
+compositor.addPass(new RenderPass(escena, camara));
+compositor.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.4, 0.25, 0.3));
+compositor.addPass(new OutputPass());
+
+window.dibujar = (t) => {
+  // Cámara detrás del teclado, con un balanceo lento
+  camara.position.set(Math.sin(t * 0.6) * 0.6, 5, 9 + Math.sin(t * 0.25) * 0.6);
+  camara.lookAt(0, 0, -8);
+
+  piso.material.uniforms.avance.value = t * VELOCIDAD;
+
+  for (const tecla of teclas.values()) tecla.material.emissive.setHex(0x000000);
+  for (const nota of notas) {
+    // El frente de la nota llega al teclado (z=0) en nota.ini; se recorta al tocarlo
+    const frente = Math.min(0, (t - nota.ini) * VELOCIDAD);
+    const atras = (t - nota.ini - nota.dur) * VELOCIDAD;
+    const largo = frente - atras;
+    nota.mesh.visible = atras < 0 && largo > 0.001;
+    if (nota.mesh.visible) {
+      nota.mesh.scale.z = largo;
+      nota.mesh.position.z = (frente + atras) / 2;
+    }
+    if (t >= nota.ini && t < nota.ini + nota.dur) {
+      teclas.get(nota.n).material.emissive.setHex(nota.color);
+    }
+  }
+  compositor.render();
+};
+
+// grabar.js llama a window.cargar(datos) antes del primer cuadro; si no, se usa el arpegio
+window.cargar = (datos) => construir(datos || datosDePrueba());
+window.listo = true;
+</script>
+</body>
+</html>

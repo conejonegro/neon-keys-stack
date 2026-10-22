@@ -1,0 +1,30 @@
+{
+  "nombre": "Cineclub Forever",
+  "id": "cineclub-forever",
+  "colores": {
+    "fondo": "#0A0A0A",
+    "fondo_tarjeta": "#18181B",
+    "borde": "#27272A",
+    "principal": "#FFFFFF",
+    "acento": "#FCBB00",
+    "acento_claro": "#FFD236",
+    "texto": "#EDEDED",
+    "texto_suave": "#99A1AF",
+    "rojo_cine": "#E40014",
+    "en_curso": "#00D294"
+  },
+  "fuentes": {
+    "titulos": { "archivo": "fuentes/Montserrat-Bold.ttf", "indice": 0 },
+    "etiquetas": { "archivo": "fuentes/Montserrat-SemiBold.ttf", "indice": 0 },
+    "texto": { "archivo": "fuentes/Lato-Regular.ttf", "indice": 0 },
+    "texto_negrita": { "archivo": "fuentes/Lato-Bold.ttf", "indice": 0 }
+  },
+  "logo": "logo.png",
+  "logo_nota": "Negro sobre transparente (535×485). Sobre fondo oscuro se invierte a blanco.",
+  "firma": "CINECLUB FOREVER",
+  "sitio": "https://cineclub-forever.vercel.app/",
+  "ciudad": "Guadalajara, Jalisco, México",
+  "cierre": "Más cine en Cineclub Forever",
+  "fps": 30,
+  "formato": [1080, 1920]
+}

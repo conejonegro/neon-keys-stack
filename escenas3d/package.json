@@ -1,0 +1,11 @@
+{
+  "name": "neon-keys-escenas3d",
+  "private": true,
+  "type": "module",
+  "description": "Escenas 3D con Three.js para Neon Keys; grabar.js las graba cuadro por cuadro",
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.21.0",
+    "puppeteer-core": "^25.13.0",
+    "three": "^0.186.1"
+  }
+}

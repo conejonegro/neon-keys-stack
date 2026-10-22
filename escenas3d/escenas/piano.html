@@ -1,0 +1,480 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body { margin: 0; background: #05010f; overflow: hidden; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Piano 3D con estallido de partículas: el mismo look de prueba.html (notas desde el horizonte, sol retro,
+// piso synthwave) y, al tocar el teclado, cada nota se rompe en esquirlas, chispas y un anillo de luz.
+// Lleva título, marca y cierre (capas de texto de preparar.py --titulo).
+// grabar.js llama a window.dibujar(t) para cada cuadro; todo se calcula a partir de t (nada depende del
+// cuadro anterior), así una vista previa en cualquier segundo sale igual que en el video.
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const W = 1080, H = 1920;
+const CIAN = 0x00f0ff, MAGENTA = 0xff2bd6;
+const VELOCIDAD = 6;          // unidades por segundo a las que avanzan las notas
+const ANCHO_TECLADO = 6.4;    // ancho máximo del teclado en unidades 3D
+const Y_GOLPE = 0.14;         // altura donde las notas tocan el teclado
+
+// Partículas
+const ESQUIRLAS = 14;         // pedacitos sólidos por golpe
+const CHISPAS = 34;           // chispas por golpe
+const CADA_CHISPA = 0.03;     // mientras una nota larga se apoya en el teclado, una chispa cada tanto
+const GRAVEDAD = 9;
+const VIDA_ANILLO = 0.38;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.autoClear = false;
+document.body.appendChild(renderer.domElement);
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(0x05010f);
+escena.fog = new THREE.Fog(0x05010f, 12, 60);
+
+const camara = new THREE.PerspectiveCamera(62, W / H, 0.1, 200);
+
+escena.add(new THREE.AmbientLight(0x6a4cff, 0.6));
+const luz = new THREE.DirectionalLight(0xffffff, 1.2);
+luz.position.set(2, 6, 4);
+escena.add(luz);
+
+// Sol retro al fondo
+const sol = new THREE.Mesh(
+  new THREE.CircleGeometry(9, 64),
+  new THREE.ShaderMaterial({
+    fog: false,
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: `varying vec2 vUv;
+      void main(){
+        vec3 c = mix(vec3(1.0,0.15,0.6), vec3(1.0,0.75,0.2), vUv.y);
+        float franja = step(0.5, fract(vUv.y * 14.0)) + step(0.55, vUv.y);
+        if (franja < 0.5 && vUv.y < 0.55) discard;
+        gl_FragColor = vec4(c * 0.5, 1.0);
+      }`,
+  })
+);
+sol.position.set(0, 4, -70);
+escena.add(sol);
+
+// Piso synthwave: rejilla dibujada con shader (ver prueba.html y ADR-011)
+const CELDA = 1.6;
+const piso = new THREE.Mesh(
+  new THREE.PlaneGeometry(240, 240),
+  new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: { avance: { value: 0 }, color: { value: new THREE.Color(MAGENTA) } },
+    vertexShader: `varying vec3 vMundo;
+      void main(){
+        vec4 m = modelMatrix * vec4(position, 1.0);
+        vMundo = m.xyz;
+        gl_Position = projectionMatrix * viewMatrix * m;
+      }`,
+    fragmentShader: `uniform float avance; uniform vec3 color; varying vec3 vMundo;
+      void main(){
+        vec2 c = vec2(vMundo.x, vMundo.z - avance) / ${CELDA.toFixed(2)};
+        vec2 paso = fwidth(c);
+        vec2 d = abs(fract(c - 0.5) - 0.5) / paso;
+        float linea = 1.0 - smoothstep(0.6, 1.6, min(d.x, d.y));
+        float densidad = max(paso.x, paso.y);
+        float lejos = 1.0 - smoothstep(0.05, 0.18, densidad);
+        float niebla = 1.0 - smoothstep(25.0, 70.0, length(vMundo.xz - cameraPosition.xz));
+        gl_FragColor = vec4(color * 0.65, linea * lejos * niebla);
+      }`,
+  })
+);
+piso.rotation.x = -Math.PI / 2;
+piso.position.y = -0.02;
+escena.add(piso);
+
+// ------------------------------------------------------------------ teclado y notas
+const esNegra = n => [1, 3, 6, 8, 10].includes(n % 12);
+const teclas = new Map();
+let notas = [];
+let blancas = [], anchoBlanca = 0.42, anchoTeclado = 0;
+
+function xDeNota(n) {
+  if (!esNegra(n)) return -anchoTeclado / 2 + (blancas.indexOf(n) + 0.5) * anchoBlanca;
+  return xDeNota(n - 1) + anchoBlanca / 2;
+}
+
+// Números al azar repetibles: la misma nota siempre estalla igual
+function azar(semilla) {
+  let a = semilla >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ------------------------------------------------------------------ partículas
+// Cada partícula se guarda con su momento de nacimiento, posición y velocidad iniciales; en cada
+// cuadro se calcula dónde está con fórmulas de tiro parabólico (sin simular paso a paso).
+const esquirlas = [];   // { t0, x, z, vx, vy, vz, vida, tam, eje, giro, color }
+const chispas = [];     // { t0, x, z, vx, vy, vz, vida, tam, color, freno }
+let vidaMax = 1.6;
+
+const blanco = new THREE.Color(1, 1, 1);
+
+function sembrarParticulas() {
+  notas.forEach((nota, i) => {
+    const r = azar(i * 7919 + nota.n * 104729 + 17);
+    const fuerza = 0.75 + 0.5 * Math.min(1, (nota.vel ?? 100) / 120);
+    const ancho = nota.ancho;
+    // Estallido al tocar el teclado
+    for (let k = 0; k < ESQUIRLAS; k++) {
+      const ang = (r() - 0.5) * Math.PI * 0.9;
+      const v = (2.2 + r() * 3.2) * fuerza;
+      esquirlas.push({
+        t0: nota.ini, x: nota.x + (r() - 0.5) * ancho, z: -r() * 0.25,
+        vx: Math.sin(ang) * v * 0.55, vy: Math.cos(ang) * v, vz: (r() - 0.35) * 2.4,
+        vida: 0.8 + r() * 0.7, tam: (0.035 + r() * 0.05) * Math.min(1.4, ancho / 0.25 + 0.4),
+        eje: new THREE.Vector3(r() - 0.5, r() - 0.5, r() - 0.5).normalize(), giro: 6 + r() * 14,
+        color: nota.color,
+      });
+    }
+    for (let k = 0; k < CHISPAS; k++) {
+      const ang = (r() - 0.5) * Math.PI * 1.15, sesgo = (r() - 0.5) * 2;
+      const v = (2.5 + r() * 5.5) * fuerza;
+      chispas.push({
+        t0: nota.ini + r() * 0.03, x: nota.x + (r() - 0.5) * ancho, z: -r() * 0.15,
+        vx: Math.sin(ang) * v * 0.7, vy: Math.abs(Math.cos(ang)) * v, vz: sesgo * 1.6,
+        vida: 0.35 + r() * 0.6, tam: 0.035 + r() * 0.05, color: nota.color, freno: 2.2 + r() * 1.5,
+      });
+    }
+    // Notas largas: se desmoronan en chispas mientras se apoyan en el teclado
+    for (let te = nota.ini + 0.06; te < nota.ini + nota.dur - 0.02; te += CADA_CHISPA) {
+      for (let k = 0; k < 2; k++) {
+        const v = 1.2 + r() * 2.8;
+        chispas.push({
+          t0: te, x: nota.x + (r() - 0.5) * ancho, z: -r() * 0.1,
+          vx: (r() - 0.5) * 1.6, vy: v, vz: (r() - 0.3) * 1.2,
+          vida: 0.3 + r() * 0.4, tam: 0.025 + r() * 0.035, color: nota.color, freno: 2.5,
+        });
+      }
+    }
+  });
+  esquirlas.sort((a, b) => a.t0 - b.t0);
+  chispas.sort((a, b) => a.t0 - b.t0);
+}
+
+// Primer índice cuyo t0 es >= valor (las listas están ordenadas)
+function desde(lista, valor) {
+  let lo = 0, hi = lista.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (lista[m].t0 < valor) lo = m + 1; else hi = m;
+  }
+  return lo;
+}
+
+// Altura con un rebote en el piso del teclado (restitución 0.35)
+function alturaConRebote(y0, vy, a) {
+  const disc = vy * vy + 2 * GRAVEDAD * y0;
+  const tPiso = (vy + Math.sqrt(disc)) / GRAVEDAD;
+  if (a < tPiso) return y0 + vy * a - 0.5 * GRAVEDAD * a * a;
+  const vRebote = (GRAVEDAD * tPiso - vy) * 0.35;
+  const b = a - tPiso;
+  return Math.max(0, vRebote * b - 0.5 * GRAVEDAD * b * b);
+}
+
+// Esquirlas: tetraedros brillantes (suma de luz, sin escribir profundidad)
+const MAX_ESQUIRLAS = 12000;
+const mallaEsquirlas = new THREE.InstancedMesh(
+  new THREE.TetrahedronGeometry(1, 0),
+  new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }),
+  MAX_ESQUIRLAS
+);
+mallaEsquirlas.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+mallaEsquirlas.setColorAt(0, blanco);
+mallaEsquirlas.frustumCulled = false;
+escena.add(mallaEsquirlas);
+
+// Chispas: puntos redondos con halo suave
+const MAX_CHISPAS = 40000;
+const geoChispas = new THREE.BufferGeometry();
+const posChispas = new Float32Array(MAX_CHISPAS * 3);
+const colChispas = new Float32Array(MAX_CHISPAS * 3);
+const tamChispas = new Float32Array(MAX_CHISPAS);
+geoChispas.setAttribute('position', new THREE.BufferAttribute(posChispas, 3).setUsage(THREE.DynamicDrawUsage));
+geoChispas.setAttribute('color', new THREE.BufferAttribute(colChispas, 3).setUsage(THREE.DynamicDrawUsage));
+geoChispas.setAttribute('tam', new THREE.BufferAttribute(tamChispas, 1).setUsage(THREE.DynamicDrawUsage));
+const puntos = new THREE.Points(geoChispas, new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true,
+  vertexShader: `attribute float tam; varying vec3 vColor;
+    void main(){
+      vColor = color;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = tam * ${(H * 0.9).toFixed(1)} / -mv.z;
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `varying vec3 vColor;
+    void main(){
+      float d = length(gl_PointCoord - 0.5) * 2.0;
+      float a = smoothstep(1.0, 0.0, d);
+      gl_FragColor = vec4(vColor * a * a, 1.0);
+    }`,
+}));
+puntos.frustumCulled = false;
+escena.add(puntos);
+
+// Anillo de luz que se abre sobre el teclado en cada golpe
+const MAX_ANILLOS = 200;
+const geoAnillo = new THREE.RingGeometry(0.8, 1, 40);
+geoAnillo.rotateX(-Math.PI / 2);
+const mallaAnillos = new THREE.InstancedMesh(
+  geoAnillo,
+  new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+  MAX_ANILLOS
+);
+mallaAnillos.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+mallaAnillos.setColorAt(0, blanco);
+mallaAnillos.frustumCulled = false;
+escena.add(mallaAnillos);
+
+const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v3 = new THREE.Vector3(), s3 = new THREE.Vector3();
+const c3 = new THREE.Color();
+
+function dibujarParticulas(t) {
+  // Esquirlas
+  let k = 0;
+  for (let i = desde(esquirlas, t - vidaMax); i < esquirlas.length && esquirlas[i].t0 <= t; i++) {
+    const p = esquirlas[i], a = t - p.t0;
+    if (a > p.vida || k >= MAX_ESQUIRLAS) continue;
+    const resto = 1 - a / p.vida;
+    v3.set(p.x + p.vx * a, alturaConRebote(Y_GOLPE, p.vy, a), p.z + p.vz * a);
+    q.setFromAxisAngle(p.eje, p.giro * a);
+    const tam = p.tam * Math.sqrt(resto);
+    s3.set(tam, tam * 1.6, tam);
+    m4.compose(v3, q, s3);
+    mallaEsquirlas.setMatrixAt(k, m4);
+    // Recién rotas salen casi blancas y se enfrían a su color
+    c3.copy(p.color).lerp(blanco, Math.max(0, 0.55 - a * 2.5)).multiplyScalar(0.9 * resto);
+    mallaEsquirlas.setColorAt(k, c3);
+    k++;
+  }
+  mallaEsquirlas.count = k;
+  mallaEsquirlas.instanceMatrix.needsUpdate = true;
+  if (mallaEsquirlas.instanceColor) mallaEsquirlas.instanceColor.needsUpdate = true;
+
+  // Chispas: con freno de aire en horizontal y gravedad
+  let j = 0;
+  for (let i = desde(chispas, t - vidaMax); i < chispas.length && chispas[i].t0 <= t; i++) {
+    const p = chispas[i], a = t - p.t0;
+    if (a > p.vida || j >= MAX_CHISPAS) continue;
+    const resto = 1 - a / p.vida;
+    const avance = (1 - Math.exp(-p.freno * a)) / p.freno;
+    posChispas[j * 3] = p.x + p.vx * avance;
+    posChispas[j * 3 + 1] = Math.max(0.02, Y_GOLPE + p.vy * avance - 0.5 * GRAVEDAD * 0.55 * a * a);
+    posChispas[j * 3 + 2] = p.z + p.vz * avance;
+    c3.copy(p.color).lerp(blanco, Math.max(0, 0.6 - a * 3)).multiplyScalar(0.85 * resto * resto);
+    colChispas[j * 3] = c3.r; colChispas[j * 3 + 1] = c3.g; colChispas[j * 3 + 2] = c3.b;
+    tamChispas[j] = p.tam * (0.5 + 0.5 * resto);
+    j++;
+  }
+  geoChispas.setDrawRange(0, j);
+  geoChispas.attributes.position.needsUpdate = true;
+  geoChispas.attributes.color.needsUpdate = true;
+  geoChispas.attributes.tam.needsUpdate = true;
+
+  // Anillos
+  let n = 0;
+  for (let i = desde(notas, t - VIDA_ANILLO); i < notas.length && notas[i].t0 <= t; i++) {
+    const nota = notas[i], a = t - nota.ini;
+    if (a > VIDA_ANILLO || n >= MAX_ANILLOS) continue;
+    const r = a / VIDA_ANILLO;
+    const radio = nota.ancho * (0.4 + 2.2 * (1 - (1 - r) * (1 - r)));
+    v3.set(nota.x, Y_GOLPE + 0.01, -0.02);
+    q.identity();
+    s3.set(radio, 1, radio * 0.7);
+    m4.compose(v3, q, s3);
+    mallaAnillos.setMatrixAt(n, m4);
+    c3.copy(nota.color).lerp(blanco, 0.3).multiplyScalar(0.8 * (1 - r));
+    mallaAnillos.setColorAt(n, c3);
+    n++;
+  }
+  mallaAnillos.count = n;
+  mallaAnillos.instanceMatrix.needsUpdate = true;
+  if (mallaAnillos.instanceColor) mallaAnillos.instanceColor.needsUpdate = true;
+}
+
+// ------------------------------------------------------------------ capas de texto (título, marca, cierre)
+// Son imágenes RGB sobre negro hechas con Pillow; se mezclan en modo "screen" como en neon_keys.py
+const hud = new THREE.Scene();
+const camaraHud = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0, 1);
+const planoHud = new THREE.PlaneGeometry(1, 1);
+let capaTitulo = null, capaMarca = null, capaCierre = null, duracionOutro = 3.5, total = 0;
+
+function capaScreen(textura) {
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthTest: false, depthWrite: false,
+    blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneMinusDstColorFactor, blendDst: THREE.OneFactor,
+    uniforms: { mapa: { value: textura }, fuerza: { value: 1 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+    fragmentShader: `uniform sampler2D mapa; uniform float fuerza; varying vec2 vUv;
+      void main(){ gl_FragColor = vec4(texture2D(mapa, vUv).rgb * fuerza, 1.0); }`,
+  });
+  const malla = new THREE.Mesh(planoHud, mat);
+  malla.renderOrder = 2;
+  hud.add(malla);
+  return malla;
+}
+
+function capaColor(color, orden) {
+  const malla = new THREE.Mesh(planoHud, new THREE.ShaderMaterial({
+    transparent: true, depthTest: false, depthWrite: false,
+    uniforms: { color: { value: new THREE.Color(color) }, opacidad: { value: 0 } },
+    vertexShader: 'void main(){ gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+    fragmentShader: 'uniform vec3 color; uniform float opacidad; void main(){ gl_FragColor = vec4(color, opacidad); }',
+  }));
+  malla.renderOrder = orden;
+  hud.add(malla);
+  return malla;
+}
+
+// Orden: título y marca → oscurecer (cierre) → letrero del cierre → fundido de entrada desde negro
+let velo = null, fundido = null;
+
+async function cargarCapas(capas) {
+  const cargador = new THREE.TextureLoader();
+  const textura = async (url) => {
+    const tx = await cargador.loadAsync(url);
+    tx.colorSpace = THREE.NoColorSpace;   // valores tal cual, sin conversión de color
+    tx.minFilter = THREE.LinearFilter;
+    tx.generateMipmaps = false;
+    return tx;
+  };
+  capaTitulo = capaScreen(await textura(capas.titulo));
+  capaMarca = capaScreen(await textura(capas.marca));
+  velo = capaColor(0x080416, 3);          // BG_TOP de neon_keys.py
+  capaCierre = capaScreen(await textura(capas.cierre));
+  capaCierre.renderOrder = 4;
+  duracionOutro = capas.outro;
+}
+fundido = capaColor(0x000000, 5);
+
+// ------------------------------------------------------------------ armado
+function construir(datos) {
+  let notaMin = datos.notaMin, notaMax = datos.notaMax;
+  if (esNegra(notaMin)) notaMin--;
+  if (esNegra(notaMax)) notaMax++;
+  blancas = [];
+  for (let n = notaMin; n <= notaMax; n++) if (!esNegra(n)) blancas.push(n);
+  anchoBlanca = Math.min(0.42, ANCHO_TECLADO / blancas.length);
+  anchoTeclado = blancas.length * anchoBlanca;
+
+  for (let n = notaMin; n <= notaMax; n++) {
+    const negra = esNegra(n);
+    const geo = negra
+      ? new THREE.BoxGeometry(anchoBlanca * 0.58, 0.16, 0.95)
+      : new THREE.BoxGeometry(anchoBlanca * 0.94, 0.1, 1.5);
+    const mat = new THREE.MeshStandardMaterial({
+      color: negra ? 0x0b0618 : 0x6e6a96, roughness: 0.4, metalness: 0.1,
+      emissive: 0x000000,
+    });
+    const tecla = new THREE.Mesh(geo, mat);
+    tecla.position.set(xDeNota(n), negra ? 0.1 : 0.05, negra ? 0.475 : 0.75);
+    tecla.userData.y = tecla.position.y;
+    escena.add(tecla);
+    teclas.set(n, tecla);
+  }
+
+  const linea = new THREE.Mesh(
+    new THREE.BoxGeometry(anchoTeclado + 0.2, 0.03, 0.04),
+    new THREE.MeshBasicMaterial({ color: 0xff7ae8 })
+  );
+  linea.position.set(0, 0.12, -0.02);
+  escena.add(linea);
+
+  notas = datos.notas.map(d => ({ ...d, colorHex: d.mano === 'L' ? MAGENTA : CIAN }))
+    .sort((a, b) => a.ini - b.ini);
+  for (const nota of notas) {
+    nota.t0 = nota.ini;
+    nota.color = new THREE.Color(nota.colorHex);
+    nota.x = xDeNota(nota.n);
+    nota.ancho = (esNegra(nota.n) ? 0.55 : 0.8) * anchoBlanca;
+    nota.mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(nota.ancho, 0.12, 1),
+      new THREE.MeshBasicMaterial({ color: nota.colorHex })
+    );
+    nota.mesh.position.x = nota.x;
+    nota.mesh.position.y = 0.12;
+    escena.add(nota.mesh);
+  }
+  sembrarParticulas();
+}
+
+const compositor = new EffectComposer(renderer);
+compositor.addPass(new RenderPass(escena, camara));
+compositor.addPass(new UnrealBloomPass(new THREE.Vector2(W, H), 0.4, 0.25, 0.3));
+compositor.addPass(new OutputPass());
+
+window.dibujar = (t) => {
+  camara.position.set(Math.sin(t * 0.6) * 0.6, 5, 9 + Math.sin(t * 0.25) * 0.6);
+  camara.lookAt(0, 0, -8);
+
+  piso.material.uniforms.avance.value = t * VELOCIDAD;
+
+  for (const tecla of teclas.values()) {
+    tecla.material.emissive.setHex(0x000000);
+    tecla.position.y = tecla.userData.y;
+  }
+  for (const nota of notas) {
+    const frente = Math.min(0, (t - nota.ini) * VELOCIDAD);
+    const atras = (t - nota.ini - nota.dur) * VELOCIDAD;
+    const largo = frente - atras;
+    nota.mesh.visible = atras < 0 && largo > 0.001;
+    if (nota.mesh.visible) {
+      nota.mesh.scale.z = largo;
+      nota.mesh.position.z = (frente + atras) / 2;
+    }
+    if (t >= nota.ini && t < nota.ini + nota.dur) {
+      const tecla = teclas.get(nota.n);
+      tecla.material.emissive.setHex(nota.colorHex);
+      tecla.position.y = tecla.userData.y - 0.035;   // la tecla se hunde un poco
+    }
+  }
+  dibujarParticulas(t);
+
+  renderer.clear();
+  compositor.render();
+
+  // Capas 2D encima del 3D (sin brillo extra)
+  if (capaTitulo) {
+    const inicioOutro = total - duracionOutro;
+    const k = t >= inicioOutro ? Math.min(1, (t - inicioOutro) / 0.8) : 0;
+    velo.material.uniforms.opacidad.value = 0.82 * k;
+    capaCierre.material.uniforms.fuerza.value = k;
+    capaCierre.visible = k > 0;
+  }
+  fundido.material.uniforms.opacidad.value = t < 0.6 ? 1 - t / 0.6 : 0;
+  renderer.render(hud, camaraHud);
+};
+
+window.cargar = async (datos) => {
+  total = datos.total;
+  construir(datos);
+  if (datos.capas) await cargarCapas(datos.capas);
+};
+window.listo = true;
+</script>
+</body>
+</html>
