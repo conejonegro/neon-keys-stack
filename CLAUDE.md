@@ -19,7 +19,8 @@ Para personajes y escenas pixel art, usar el skill `pixel-art-studio` (método y
 **Marcas y motion graphics (ADR-018, ADR-019):** cada marca tiene su carpeta en `marcas/<marca>/` con
 `brand.md`, `MOTION.md` (colores, fuentes, tiempos, reglas de movimiento), `marca.json` (los mismos valores para
 el código), `logo.png` y, si hace falta, `fuentes/`. Marcas: `neon-keys` (la de siempre, por defecto) y
-`cineclub-forever` (cine, borrador sin aprobar). Si no está claro para qué marca es un video, preguntar.
+`cineclub-forever` (cine, borrador sin aprobar) y `asi-se-arma` (3D de día "así se arma…", paleta tapatía, sin neón;
+borrador, primera prueba: `escenas3d/torta.py` + `escenas/torta.html`). Si no está claro para qué marca es un video, preguntar.
 Antes de diseñar, generar o animar cualquier cosa, leer completos `MOTION.md` y `brand.md` de esa marca. Cada
 color, fuente y tiempo sale de ahí; nunca mezclar el estilo de dos marcas.
 El archivo fija el look, no la ambición: cuando se pida "con todo", ir con todo. Si algo no está cubierto,

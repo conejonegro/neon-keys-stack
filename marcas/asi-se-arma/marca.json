@@ -1,0 +1,21 @@
+{
+  "nombre": "Así se arma",
+  "id": "asi-se-arma",
+  "colores": {
+    "crema": "#F4ECDD",
+    "cielo": "#BFE3F2",
+    "talavera": "#2453A6",
+    "cantera": "#E7B7A3",
+    "maiz": "#F2C14E",
+    "nopal": "#6FA85A",
+    "chile": "#C8402F",
+    "jacaranda": "#9B7FD1",
+    "contorno": "#2B2230"
+  },
+  "fuentes": {
+    "titulo": { "archivo": "fuentes/LilitaOne-Regular.ttf", "indice": 0 }
+  },
+  "logo": null,
+  "fps": 30,
+  "formato": [1080, 1920]
+}

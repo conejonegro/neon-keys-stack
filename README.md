@@ -77,8 +77,8 @@ Claude Code en la carpeta y pídele el video.
 ## Crea tu marca
 
 Cada marca vive en su carpeta, `marcas/<tu-marca>/`, y Claude Code la lee antes de diseñar o animar cualquier cosa.
-Así nunca se mezclan los estilos. Ejemplos: `marcas/neon-keys/` (neón, piano) y `marcas/cineclub-forever/`
-(collage de cine).
+Así nunca se mezclan los estilos. Ejemplos: `marcas/neon-keys/` (neón, piano), `marcas/cineclub-forever/`
+(collage de cine) y `marcas/asi-se-arma/` (3D de día, paleta tapatía).
 
 1. **Junta de 3 a 5 imágenes** de lo que te gusta: capturas de videos, tu logo, posts, paletas. Mete tu logo
    en PNG si ya tienes.
