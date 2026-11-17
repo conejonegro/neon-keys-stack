@@ -1,0 +1,543 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body { margin: 0; background: #080416; overflow: hidden; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// "Tu primer beat en una drum machine": caja negra biselada con 16 pads (4 × 4), pantalla, perillas TEMPO y
+// SWING, sobre el piso synthwave con el sol retro. Cada pad es un sonido: con cada golpe se hunde, destella
+// en su color según la fuerza y regresa. Sin datos (vista previa del diseño) usa un patrón boom bap de prueba.
+// grabar.js llama a window.cargar(datos) y luego a window.dibujar(t); todo sale de t.
+import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { CopyShader } from 'three/addons/shaders/CopyShader.js';
+
+const W = 1080, H = 1920;
+const CIAN = 0x00f0ff, MAGENTA = 0xff32d2, MORADO = 0xaa64ff;
+// Pads con sonido: fila 0 y 1 (de atrás hacia adelante). Cian = agudos, magenta = graves (MOTION.md)
+const PADS = {
+  'KICK': { fila: 0, col: 0, color: MAGENTA },
+  'SNARE': { fila: 0, col: 1, color: CIAN },
+  'HI-HAT': { fila: 0, col: 2, color: CIAN },
+  'CHOP': { fila: 0, col: 3, color: MORADO },
+  'OPEN HAT': { fila: 1, col: 0, color: CIAN },
+  'PERC': { fila: 1, col: 1, color: MORADO },
+  'BASS': { fila: 1, col: 2, color: MAGENTA },
+  'FX': { fila: 1, col: 3, color: MORADO },
+};
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.autoClear = false;
+document.body.appendChild(renderer.domElement);
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(0x080416);
+escena.fog = new THREE.Fog(0x0d0520, 40, 130);
+// Reflejos suaves en el plástico y el metal de las perillas
+const pmrem = new THREE.PMREMGenerator(renderer);
+escena.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+escena.environmentIntensity = 0.35;
+const camara = new THREE.PerspectiveCamera(50, W / H, 0.1, 300);
+
+escena.add(new THREE.HemisphereLight(0xb9b4ff, 0x2a0a3a, 0.5));
+const luz = new THREE.DirectionalLight(0xffffff, 1.1);
+luz.position.set(-4, 12, 6);
+escena.add(luz);
+const luzCian = new THREE.PointLight(CIAN, 22, 22, 1.6);
+luzCian.position.set(-8, 2.5, 3);
+const luzMagenta = new THREE.PointLight(MAGENTA, 22, 22, 1.6);
+luzMagenta.position.set(8, 2.5, 3);
+escena.add(luzCian, luzMagenta);
+
+// ------------------------------------------------------------------ fondo: degradado, sol, piso
+const cielo = new THREE.Mesh(new THREE.SphereGeometry(200, 32, 16), new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `varying vec3 vP;
+    void main(){
+      float y = normalize(vP).y;
+      // En lineal (la salida pasa a sRGB): #080416 arriba → #1A082C en el horizonte, con un rubor magenta abajo
+      vec3 arriba = vec3(0.0024, 0.0012, 0.0080), abajo = vec3(0.0103, 0.0024, 0.0252);
+      vec3 c = mix(abajo, arriba, smoothstep(-0.02, 0.4, y));
+      c += vec3(0.05, 0.004, 0.035) * (1.0 - smoothstep(0.0, 0.12, abs(y)));
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+}));
+escena.add(cielo);
+
+const sol = new THREE.Mesh(new THREE.CircleGeometry(9, 96), new THREE.ShaderMaterial({
+  fog: false, uniforms: { latido: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform float latido; varying vec2 vUv;
+    void main(){
+      vec3 c = mix(vec3(1.0,0.06,0.55), vec3(1.0,0.45,0.12), smoothstep(0.1, 0.95, vUv.y));
+      float franja = step(0.5, fract(vUv.y * 14.0)) + step(0.6, vUv.y);
+      if (franja < 0.5 && vUv.y < 0.6) discard;
+      gl_FragColor = vec4(pow(c, vec3(1.6)) * (0.75 + 0.2 * latido), 1.0);
+    }`,
+}));
+sol.position.set(0, 0.5, -110);
+escena.add(sol);
+
+const piso = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.ShaderMaterial({
+  uniforms: { avance: { value: 0 }, latido: { value: 0 } },
+  vertexShader: `varying vec3 vMundo;
+    void main(){ vec4 m = modelMatrix * vec4(position, 1.0); vMundo = m.xyz; gl_Position = projectionMatrix * viewMatrix * m; }`,
+  fragmentShader: `uniform float avance; uniform float latido; varying vec3 vMundo;
+    void main(){
+      vec2 c = vec2(vMundo.x, vMundo.z + avance) / 2.2;
+      vec2 paso = fwidth(c);
+      vec2 d = abs(fract(c - 0.5) - 0.5) / paso;
+      float linea = 1.0 - smoothstep(0.6, 1.6, min(d.x, d.y));
+      float lejos = 1.0 - smoothstep(0.05, 0.2, max(paso.x, paso.y));
+      float niebla = 1.0 - smoothstep(35.0, 110.0, length(vMundo.xz - cameraPosition.xz));
+      // Cian a la izquierda, magenta a la derecha, como la luz de la máquina
+      vec3 col = mix(vec3(0.0, 0.9, 1.0), vec3(1.0, 0.16, 0.78), smoothstep(-14.0, 14.0, vMundo.x));
+      col *= 0.2 + 0.1 * latido;
+      gl_FragColor = vec4(vec3(0.0103, 0.0024, 0.0252) + col * linea * lejos * niebla, 1.0);
+    }`,
+}));
+piso.rotation.x = -Math.PI / 2;
+escena.add(piso);
+
+// ------------------------------------------------------------------ utilidades
+// Textura de texto para etiquetas y pantalla
+function texturaTexto(ancho, alto, pintar) {
+  const c = document.createElement('canvas');
+  c.width = ancho;
+  c.height = alto;
+  pintar(c.getContext('2d'), ancho, alto);
+  const tx = new THREE.CanvasTexture(c);
+  tx.colorSpace = THREE.SRGBColorSpace;
+  tx.anisotropy = 8;
+  return tx;
+}
+// Marco plano de esquinas redondas (borde de luz); ancho × fondo en el plano XZ
+function marco(ancho, fondo, radio, grosor) {
+  const rect = (w, d, r) => {
+    const s = new THREE.Shape();
+    const x = -w / 2, y = -d / 2;
+    s.moveTo(x + r, y);
+    s.lineTo(x + w - r, y); s.quadraticCurveTo(x + w, y, x + w, y + r);
+    s.lineTo(x + w, y + d - r); s.quadraticCurveTo(x + w, y + d, x + w - r, y + d);
+    s.lineTo(x + r, y + d); s.quadraticCurveTo(x, y + d, x, y + d - r);
+    s.lineTo(x, y + r); s.quadraticCurveTo(x, y, x + r, y);
+    return s;
+  };
+  const s = rect(ancho, fondo, radio);
+  s.holes.push(rect(ancho - 2 * grosor, fondo - 2 * grosor, Math.max(radio - grosor, 0.01)));
+  const g = new THREE.ShapeGeometry(s, 8);
+  g.rotateX(-Math.PI / 2);
+  return g;
+}
+
+// ------------------------------------------------------------------ la máquina
+const ANCHO = 8.6, FONDO = 11.2, ALTO = 1.0;
+const SEP = 1.95, PAD = 1.68, ALTO_PAD = 0.32;
+const Z_PADS = 1.15;                         // centro de la matriz de pads (los controles van atrás)
+const INCLINA = 0.42;                        // la parte de atrás se levanta para que la cámara vea los pads de frente
+const maquina = new THREE.Group();
+maquina.rotation.x = INCLINA;
+maquina.position.set(0, FONDO / 2 * Math.sin(INCLINA) + 0.05, 0);
+escena.add(maquina);
+
+const cuerpo = new THREE.Mesh(new RoundedBoxGeometry(ANCHO, ALTO, FONDO, 6, 0.38), new THREE.MeshStandardMaterial({
+  color: 0x1b1922, roughness: 0.55, metalness: 0.35,
+}));
+cuerpo.position.y = ALTO / 2;
+maquina.add(cuerpo);
+// Placa superior un poco más clara y mate
+const placa = new THREE.Mesh(new RoundedBoxGeometry(ANCHO - 0.5, 0.08, FONDO - 0.5, 4, 0.03), new THREE.MeshStandardMaterial({
+  color: 0x24222c, roughness: 0.8, metalness: 0.15,
+}));
+placa.position.y = ALTO;
+maquina.add(placa);
+
+// Tira de luz alrededor de la base: cian a la izquierda → magenta a la derecha
+{
+  const g = marco(ANCHO + 0.14, FONDO + 0.14, 0.45, 0.1);
+  const pos = g.attributes.position, col = new Float32Array(pos.count * 3);
+  const a = new THREE.Color(CIAN), b = new THREE.Color(MAGENTA), c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    c.lerpColors(a, b, THREE.MathUtils.smoothstep(pos.getX(i), -ANCHO / 2, ANCHO / 2));
+    col.set([c.r * 1.25, c.g * 1.25, c.b * 1.25], i * 3);
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, side: THREE.DoubleSide });
+  for (const y of [0.16, 0.24]) {
+    const tira = new THREE.Mesh(g, mat);
+    tira.position.y = y;
+    maquina.add(tira);
+  }
+  // Charco de luz en el piso
+  const charco = new THREE.Mesh(new THREE.PlaneGeometry(26, 22), new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: `varying vec2 vUv;
+      void main(){
+        vec2 p = (vUv - 0.5) * vec2(26.0, 22.0);
+        vec2 q = max(abs(p) - vec2(4.3, 5.6), 0.0);
+        float d = length(q);
+        float k = exp(-d * 0.6) * 0.22;
+        vec3 c = mix(vec3(0.0, 0.94, 1.0), vec3(1.0, 0.2, 0.82), smoothstep(-6.0, 6.0, p.x));
+        gl_FragColor = vec4(c * k, 1.0);
+      }`,
+  }));
+  charco.rotation.x = -Math.PI / 2;
+  charco.position.set(0, 0.01, 1.5);
+  escena.add(charco);
+}
+
+// Pads: tapa de goma + borde de luz + etiqueta. nivel (0..1) sube con cada golpe.
+const pads = [];
+const geoPad = new RoundedBoxGeometry(PAD, ALTO_PAD, PAD, 4, 0.1);
+const geoBorde = marco(PAD + 0.06, PAD + 0.06, 0.16, 0.07);
+const geoHueco = new THREE.PlaneGeometry(PAD + 0.18, PAD + 0.18);
+for (let fila = 0; fila < 4; fila++) {
+  for (let col = 0; col < 4; col++) {
+    const nombre = Object.keys(PADS).find(k => PADS[k].fila === fila && PADS[k].col === col) || null;
+    const color = new THREE.Color(nombre ? PADS[nombre].color : 0x7a4cc8);
+    const x = (col - 1.5) * SEP, z = Z_PADS + (fila - 1.5) * SEP;
+    // Hueco oscuro donde se hunde el pad
+    const hueco = new THREE.Mesh(geoHueco, new THREE.MeshStandardMaterial({ color: 0x08070c, roughness: 1 }));
+    hueco.rotation.x = -Math.PI / 2;
+    hueco.position.set(x, ALTO + 0.045, z);
+    maquina.add(hueco);
+    const grupo = new THREE.Group();
+    grupo.position.set(x, ALTO + 0.04, z);
+    const tapa = new THREE.Mesh(geoPad, new THREE.MeshStandardMaterial({
+      color: 0x2b1d44, roughness: 0.62, metalness: 0.0, emissive: color.clone(), emissiveIntensity: 0,
+    }));
+    tapa.position.y = ALTO_PAD / 2;
+    const borde = new THREE.Mesh(geoBorde, new THREE.MeshBasicMaterial({ color: color.clone(), toneMapped: false }));
+    borde.position.y = ALTO_PAD + 0.005;
+    grupo.add(tapa, borde);
+    if (nombre) {
+      const tx = texturaTexto(512, 512, (g, w, h) => {
+        g.font = `bold ${nombre.length > 6 ? 80 : 118}px Futura`;
+        g.textAlign = 'center';
+        g.textBaseline = 'middle';
+        g.letterSpacing = '4px';
+        g.lineWidth = 10;
+        g.lineJoin = 'round';
+        g.strokeStyle = 'rgba(10,6,20,0.85)';
+        g.strokeText(nombre, w / 2, h / 2);
+        g.fillStyle = '#ffffff';
+        g.fillText(nombre, w / 2, h / 2);
+      });
+      const etiqueta = new THREE.Mesh(new THREE.PlaneGeometry(PAD * 0.92, PAD * 0.92),
+        new THREE.MeshBasicMaterial({ map: tx, transparent: true, depthWrite: false, toneMapped: false }));
+      etiqueta.rotation.x = -Math.PI / 2;
+      etiqueta.position.y = ALTO_PAD + 0.01;
+      grupo.add(etiqueta);
+    }
+    maquina.add(grupo);
+    pads.push({ nombre, color, grupo, tapa, borde, base: nombre ? 0.55 : 0.2 });
+  }
+}
+
+// Pantalla: vidrio negro con NEON KEYS, tempo, compás y estado (REC / PLAY / OVERDUB)
+const lienzoPantalla = document.createElement('canvas');
+lienzoPantalla.width = 1024;
+lienzoPantalla.height = 384;
+const ctxP = lienzoPantalla.getContext('2d');
+const texPantalla = new THREE.CanvasTexture(lienzoPantalla);
+texPantalla.colorSpace = THREE.SRGBColorSpace;
+texPantalla.anisotropy = 8;
+const Z_CONTROLES = Z_PADS - 2 * SEP - 1.35;
+{
+  const marcoPantalla = new THREE.Mesh(new RoundedBoxGeometry(4.75, 0.12, 1.85, 3, 0.05),
+    new THREE.MeshStandardMaterial({ color: 0x0a090f, roughness: 0.3, metalness: 0.5 }));
+  marcoPantalla.position.set(-1.55, ALTO + 0.06, Z_CONTROLES);
+  maquina.add(marcoPantalla);
+  const vidrio = new THREE.Mesh(new THREE.PlaneGeometry(4.5, 1.69), new THREE.MeshBasicMaterial({ map: texPantalla, toneMapped: false }));
+  vidrio.rotation.x = -Math.PI / 2;
+  vidrio.position.set(-1.55, ALTO + 0.125, Z_CONTROLES);
+  maquina.add(vidrio);
+}
+function pintarPantalla(estado, compas, tiempo, bpm, swing) {
+  const g = ctxP, w = 1024, h = 384;
+  g.fillStyle = '#05040a';
+  g.fillRect(0, 0, w, h);
+  const brillo = (txt, x, y, color, blur) => {
+    g.fillStyle = color;
+    g.shadowColor = color;
+    g.shadowBlur = blur;
+    g.fillText(txt, x, y);
+    g.shadowBlur = 0;
+    g.fillText(txt, x, y);
+  };
+  g.textBaseline = 'alphabetic';
+  g.textAlign = 'left';
+  g.letterSpacing = '6px';
+  g.font = 'bold 84px Futura';
+  brillo('NEON KEYS', 48, 128, '#00f0ff', 22);
+  g.letterSpacing = '0px';
+  g.textAlign = 'right';
+  g.font = 'bold 64px Futura';
+  brillo(`${bpm} BPM`, w - 48, 124, '#8ff8ff', 14);
+  g.fillStyle = 'rgba(0,240,255,0.55)';
+  g.fillRect(48, 166, w - 96, 4);
+  g.textAlign = 'left';
+  g.font = 'bold 60px Futura';
+  const rec = estado === 'REC' || estado === 'OVERDUB';
+  g.fillStyle = rec ? '#ff32d2' : 'rgba(255,50,210,0.25)';
+  g.shadowColor = '#ff32d2';
+  g.shadowBlur = rec ? 18 : 0;
+  g.beginPath();
+  g.arc(72, 262, 18, 0, Math.PI * 2);
+  g.fill();
+  g.shadowBlur = 0;
+  if (rec) brillo(estado, 104, 284, '#ff32d2', 16);
+  else { g.fillStyle = 'rgba(255,50,210,0.3)'; g.fillText('REC', 104, 284); }
+  const play = estado !== 'STOP';
+  g.fillStyle = play ? '#00f0ff' : 'rgba(0,240,255,0.25)';
+  g.beginPath();
+  g.moveTo(470, 238); g.lineTo(506, 262); g.lineTo(470, 286);
+  g.fill();
+  if (play) brillo('PLAY', 524, 284, '#00f0ff', 16);
+  else { g.fillStyle = 'rgba(0,240,255,0.3)'; g.fillText('PLAY', 524, 284); }
+  g.textAlign = 'right';
+  g.font = 'bold 50px Menlo';
+  brillo(`${String(compas).padStart(2, '0')}.${tiempo}`, w - 48, 282, '#ffffff', 8);
+  g.font = '600 34px "Avenir Next"';
+  g.fillStyle = 'rgba(185,180,255,0.8)';
+  g.fillText(`SWING ${swing}%`, w - 48, 346);
+  texPantalla.needsUpdate = true;
+}
+
+// Perillas TEMPO y SWING: metal oscuro con estrías y una raya de luz que marca el valor
+const perillas = {};
+for (const [nombre, x, color] of [['TEMPO', 1.75, CIAN], ['SWING', 3.15, MAGENTA]]) {
+  const grupo = new THREE.Group();
+  grupo.position.set(x, ALTO + 0.04, Z_CONTROLES - 0.2);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.66, 0.1, 48),
+    new THREE.MeshStandardMaterial({ color: 0x0c0b10, roughness: 0.4, metalness: 0.6 }));
+  base.position.y = 0.05;
+  const giro = new THREE.Group();
+  const geoPerilla = new THREE.CylinderGeometry(0.5, 0.55, 0.55, 40);
+  {
+    // Estrías: ondula el radio de la cara lateral
+    const p = geoPerilla.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const px = p.getX(i), pz = p.getZ(i), r = Math.hypot(px, pz);
+      if (r > 0.3) {
+        const a = Math.atan2(pz, px), k = 1 + 0.035 * Math.cos(a * 20);
+        p.setX(i, px * k);
+        p.setZ(i, pz * k);
+      }
+    }
+    geoPerilla.computeVertexNormals();
+  }
+  const cuerpoPerilla = new THREE.Mesh(geoPerilla, new THREE.MeshStandardMaterial({ color: 0x2a2a33, roughness: 0.28, metalness: 0.9 }));
+  cuerpoPerilla.position.y = 0.375;
+  const tapa = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.04, 40),
+    new THREE.MeshStandardMaterial({ color: 0x3b3b46, roughness: 0.18, metalness: 1.0 }));
+  tapa.position.y = 0.665;
+  const raya = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.03, 0.3), new THREE.MeshBasicMaterial({ color, toneMapped: false }));
+  raya.position.set(0, 0.69, -0.24);
+  giro.add(cuerpoPerilla, tapa, raya);
+  grupo.add(base, giro);
+  const tx = texturaTexto(256, 64, (g, w, h) => {
+    g.font = 'bold 40px Futura';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.letterSpacing = '4px';
+    g.fillStyle = '#e8e4ff';
+    g.fillText(nombre, w / 2, h / 2);
+  });
+  const etiqueta = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.35), new THREE.MeshBasicMaterial({ map: tx, transparent: true, depthWrite: false }));
+  etiqueta.rotation.x = -Math.PI / 2;
+  etiqueta.position.set(0, 0.02, 0.95);
+  grupo.add(etiqueta);
+  maquina.add(grupo);
+  perillas[nombre] = giro;
+}
+// Línea fina bajo las perillas, como en la referencia
+{
+  const linea = new THREE.Mesh(new THREE.PlaneGeometry(2.9, 0.025), new THREE.MeshBasicMaterial({ color: 0x5a5470 }));
+  linea.rotation.x = -Math.PI / 2;
+  linea.position.set(2.45, ALTO + 0.05, Z_CONTROLES + 1.05);
+  maquina.add(linea);
+}
+
+// ------------------------------------------------------------------ capa 2D: subtítulos (modo screen, sin bloom)
+const hud = new THREE.Scene();
+const camaraHud = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0, 1);
+const lienzo = document.createElement('canvas');
+lienzo.width = W;
+lienzo.height = H;
+const ctx = lienzo.getContext('2d');
+const texHud = new THREE.CanvasTexture(lienzo);
+texHud.colorSpace = THREE.NoColorSpace;
+texHud.minFilter = THREE.LinearFilter;
+texHud.generateMipmaps = false;
+const capaTexto = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false,
+  blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+  blendSrc: THREE.OneMinusDstColorFactor, blendDst: THREE.OneFactor,
+  uniforms: { mapa: { value: texHud } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: 'uniform sampler2D mapa; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(mapa, vUv).rgb, 1.0); }',
+}));
+hud.add(capaTexto);
+
+// Texto limpio, sin halo ni fondo detrás (pedido del dueño, como en la ocarina)
+function texto(txt, x, y, color) {
+  ctx.fillStyle = color;
+  ctx.fillText(txt, x, y);
+}
+
+// ------------------------------------------------------------------ posproceso
+const compositor = new EffectComposer(renderer);
+compositor.addPass(new RenderPass(escena, camara));
+const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 0.45, 0.35, 0.72);
+compositor.addPass(bloom);
+compositor.addPass(new OutputPass());
+const pasoHud = new RenderPass(hud, camaraHud);
+pasoHud.clear = false;
+compositor.addPass(pasoHud);
+compositor.addPass(new ShaderPass(CopyShader));   // la última pasada es la que va a pantalla
+
+// ------------------------------------------------------------------ datos
+const clamp01 = x => Math.min(1, Math.max(0, x));
+const salida = x => 1 - Math.pow(1 - clamp01(x), 3);
+let D = null;
+
+// Patrón boom bap de prueba (88 BPM, swing 58 %) para ver el diseño sin datos de Python
+function datosDePrueba() {
+  const bpm = 88, beat = 60 / bpm, semi = beat / 4, swing = 0.58;
+  const golpes = [];
+  const t16 = (n) => { const par = Math.floor(n / 2) * 2 * semi; return n % 2 ? par + 2 * semi * swing : par; };
+  for (let c = 0; c < 8; c++) {
+    const t0 = c * 4 * beat;
+    for (const n of [0, 7, 10]) golpes.push({ t: t0 + t16(n), pad: 'KICK', v: n ? 0.8 : 1 });
+    for (const n of [4, 12]) golpes.push({ t: t0 + t16(n), pad: 'SNARE', v: 1 });
+    for (let n = 0; n < 16; n += 2) golpes.push({ t: t0 + t16(n), pad: 'HI-HAT', v: n % 4 ? 0.45 : 0.8 });
+    golpes.push({ t: t0 + t16(14), pad: 'OPEN HAT', v: 0.6 });
+    if (c % 2 === 0) golpes.push({ t: t0, pad: 'CHOP', v: 0.9 });
+    for (const n of [0, 6, 10]) golpes.push({ t: t0 + t16(n), pad: 'BASS', v: 0.8 });
+  }
+  return {
+    bpm, swing: 58, total: 4 * 8 * beat, golpes,
+    textos: [{ t0: 0, t1: 99, palabras: 'Estos cuatro pads son suficientes para hacer esto'.split(' ')
+      .map((txt, i) => ({ txt, t: 0.1 + i * 0.2, clave: txt === 'cuatro' || txt === 'pads' })) }],
+    estado: 'PLAY',
+  };
+}
+
+window.cargar = (d) => {
+  D = d || datosDePrueba();
+  D.porPad = {};
+  for (const g of D.golpes) (D.porPad[g.pad] ||= []).push(g);
+};
+
+// Envolvente del último golpe de un pad: hundimiento rápido (0.03 s) y regreso suave (~0.25 s)
+function golpeDe(nombre, t) {
+  const lista = D.porPad[nombre];
+  if (!lista) return { hundir: 0, luz: 0 };
+  let hundir = 0, luz = 0;
+  for (let i = lista.length - 1; i >= 0; i--) {
+    const dt = t - lista[i].t;
+    if (dt < 0) continue;
+    if (dt > 0.6) break;
+    const v = lista[i].v;
+    const h = dt < 0.03 ? dt / 0.03 : Math.exp(-(dt - 0.03) * 14);
+    hundir = Math.max(hundir, h * (0.5 + 0.5 * v));
+    luz = Math.max(luz, Math.exp(-dt * 7) * v);
+  }
+  return { hundir, luz };
+}
+
+window.dibujar = (t) => {
+  const beat = 60 / D.bpm;
+  const latido = Math.exp(-((t % beat) / beat) * 5);
+
+  // Cámara elevada, un poco girada para que se vea el grosor del lado izquierdo; respira apenas
+  const yaw = -0.13 + 0.012 * Math.sin(t * 0.4);
+  const dist = 24, alto = 7.2;
+  camara.position.set(Math.sin(yaw) * dist, alto, Math.cos(yaw) * dist);
+  // El sol siempre al centro, detrás de la máquina
+  sol.position.x = camara.position.x - Math.tan(yaw) * (camara.position.z - sol.position.z);
+  sol.lookAt(camara.position.x, sol.position.y, camara.position.z);
+  // Mira 11° hacia abajo: deja el horizonte con el sol justo encima de la máquina
+  camara.lookAt(camara.position.x - Math.sin(yaw) * 10, alto - 10 * Math.tan(0.2), camara.position.z - Math.cos(yaw) * 10);
+
+  piso.material.uniforms.avance.value = t * 3.2 * (D.bpm / 60) / 2;
+  piso.material.uniforms.latido.value = latido;
+  sol.material.uniforms.latido.value = latido;
+
+  for (const p of pads) {
+    const g = p.nombre ? golpeDe(p.nombre, t) : { hundir: 0, luz: 0 };
+    p.grupo.position.y = ALTO + 0.04 - 0.13 * g.hundir;
+    p.tapa.material.emissiveIntensity = (p.nombre ? 0.06 : 0.02) + 0.55 * g.luz;
+    // El borde nace casi blanco y se enfría a su color (luz aditiva, MOTION.md)
+    p.borde.material.color.copy(p.color).multiplyScalar(p.base + 1.6 * g.luz).lerp(new THREE.Color(2, 2, 2), 0.15 * g.luz);
+  }
+  perillas.TEMPO.rotation.y = -0.6;
+  perillas.SWING.rotation.y = 0.9;
+
+  const compas = Math.floor(t / (4 * beat)) + 1, tiempo = Math.floor((t % (4 * beat)) / beat) + 1;
+  pintarPantalla(D.estado || 'PLAY', compas, tiempo, D.bpm, D.swing);
+  bloom.strength = 0.42 + 0.08 * latido;
+
+  // Subtítulo palabra por palabra en la zona de arriba
+  ctx.clearRect(0, 0, W, H);
+  const sec = D.textos.find(s => t >= s.t0 && t < s.t1);
+  if (sec) {
+    ctx.font = 'bold 76px Futura';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    const espacio = ctx.measureText(' ').width, maxAncho = 900, interlineado = 92;
+    const lineas = [[]];
+    let ancho = 0;
+    for (const p of sec.palabras) {
+      const w = ctx.measureText(p.txt).width;
+      if (ancho + w > maxAncho && lineas[lineas.length - 1].length) { lineas.push([]); ancho = 0; }
+      lineas[lineas.length - 1].push({ ...p, w });
+      ancho += w + espacio;
+    }
+    lineas.forEach((ls, li) => {
+      const total = ls.reduce((a, p) => a + p.w, 0) + espacio * (ls.length - 1);
+      let x = (W - total) / 2;
+      const y = 300 + li * interlineado;
+      for (const p of ls) {
+        const k = salida((t - p.t) / 0.18);
+        if (k > 0) {
+          ctx.save();
+          ctx.globalAlpha = k;
+          ctx.translate(x + p.w / 2, y + 22 * (1 - k));
+          texto(p.txt, -p.w / 2, 0, p.clave ? '#ff78e6' : '#ffffff');
+          ctx.restore();
+        }
+        x += p.w + espacio;
+      }
+    });
+  }
+  texHud.needsUpdate = true;
+
+  renderer.clear();
+  compositor.render();
+};
+
+window.listo = true;
+</script>
+</body>
+</html>

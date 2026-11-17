@@ -1,0 +1,505 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body { margin: 0; background: #F4ECDD; overflow: hidden; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Así se arma: la torta ahogada (marca marcas/asi-se-arma, paleta tapatía). Cocina de fonda de día: barra de
+// cantera con talavera, ventana en arco con la Catedral, papel picado y un cocinerito de bloques. La torta se arma
+// pieza por pieza (birote, carnitas, salsa, chile, cebolla) y cada pieza se etiqueta con línea y puntito.
+// Tiempos en el JSON de torta.py. grabar.js llama a window.dibujar(t); todo depende solo de t.
+import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+
+const W = 1080, H = 1920;
+const C = {
+  crema: 0xF4ECDD, cielo: 0xBFE3F2, talavera: 0x2453A6, cantera: 0xE7B7A3, maiz: 0xF2C14E, nopal: 0x6FA85A,
+  chile: 0xC8402F, jacaranda: 0x9B7FD1, contorno: 0x2B2230,
+  pan: 0xE3A24A, costra: 0xD98A2E, miga: 0xF6E3B4, salsa: 0xD9532F, chileOscuro: 0x8E1B12, cebolla: 0xC69BE0,
+  piel: 0xE0A57A, blanco: 0xFBF8F2, barro: 0xB5643A,
+};
+const TXT = { contorno: '#2B2230', maiz: '#F2C14E', blanco: '#FFFFFF', talavera: '#2453A6', chile: '#C8402F' };
+let EV = null, CAIDA = 0.45;
+
+const clamp = (x) => Math.min(1, Math.max(0, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const suave = (a, b, x) => { const k = clamp((x - a) / (b - a)); return k * k * (3 - 2 * k); };
+const salida = (x) => 1 - Math.pow(1 - clamp(x), 3);
+const rebote = (x) => { x = clamp(x); const c = 1.9; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const azar = (s) => { const x = Math.sin(s * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+
+// Pieza que cae desde `alto` y toca a los CAIDA s: altura extra y aplastamiento (1 = normal)
+function caida(t, t0, alto) {
+  const u = (t - t0) / CAIDA;
+  if (u < 1) return { y: alto * (1 - u * u), sq: 1, visible: u >= 0 };
+  const k = t - t0 - CAIDA;
+  return { y: 0.12 * Math.abs(Math.sin(k * 9)) * Math.exp(-k * 8), sq: 1 - 0.28 * Math.exp(-k * 9) * Math.cos(k * 22), visible: true };
+}
+const aplastar = (obj, sq) => obj.scale.set(1 + (1 - sq) * 0.5, sq, 1 + (1 - sq) * 0.5);
+const gesto = (t, t0) => suave(t0 - 0.1, t0 + 0.25, t) * (1 - suave(t0 + 0.6, t0 + 1.0, t));
+
+// ------------------------------------------------------------------ render
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.autoClear = false;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.localClippingEnabled = true;
+document.body.appendChild(renderer.domElement);
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(C.crema);
+const camara = new THREE.PerspectiveCamera(46, W / H, 0.1, 100);
+
+escena.add(new THREE.HemisphereLight(0xE4F3FF, 0xE7B7A3, 1.5));
+const sol = new THREE.DirectionalLight(0xFFF2DC, 2.4);
+sol.position.set(-4, 8, 6);
+sol.castShadow = true;
+sol.shadow.mapSize.set(2048, 2048);
+Object.assign(sol.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 1, far: 30 });
+sol.shadow.bias = -0.0006;
+escena.add(sol);
+
+// Sombreado de caricatura: 3 tonos. Contorno: casco por detrás un poco más grande.
+const tonos = new THREE.DataTexture(new Uint8Array([110, 110, 110, 255, 190, 190, 190, 255, 255, 255, 255, 255]), 3, 1);
+tonos.minFilter = tonos.magFilter = THREE.NearestFilter;
+tonos.needsUpdate = true;
+const mat = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: tonos, ...extra });
+const matContorno = (extra = {}) => new THREE.MeshBasicMaterial({ color: C.contorno, side: THREE.BackSide, ...extra });
+const CONTORNO = matContorno();
+const G = 0.022;
+
+function pieza(geo, casco, color, opciones = {}) {
+  const grupo = new THREE.Group();
+  const m = new THREE.Mesh(geo, opciones.material || mat(color));
+  m.castShadow = opciones.sombra !== false;
+  m.receiveShadow = true;
+  grupo.add(m);
+  if (casco) grupo.add(new THREE.Mesh(casco, opciones.contorno || CONTORNO));
+  grupo.userData.malla = m;
+  return grupo;
+}
+const caja = (w, h, d, color, r = 0.06, op) =>
+  pieza(new RoundedBoxGeometry(w, h, d, 3, r), new RoundedBoxGeometry(w + 2 * G, h + 2 * G, d + 2 * G, 3, r + G), color, op);
+const cil = (rt, rb, h, color, op, seg = 32) =>
+  pieza(new THREE.CylinderGeometry(rt, rb, h, seg), new THREE.CylinderGeometry(rt + G, rb + G, h + 2 * G, seg), color, op);
+const esfera = (r, color, op) =>
+  pieza(new THREE.SphereGeometry(r, 24, 16), new THREE.SphereGeometry(r + G, 24, 16), color, op);
+const toro = (R, r, color, op) =>
+  pieza(new THREE.TorusGeometry(R, r, 12, 32), new THREE.TorusGeometry(R, r + G, 12, 32), color, op);
+const plano = (w, h, material) => new THREE.Mesh(new THREE.PlaneGeometry(w, h), material);
+
+function lienzo(w, h, pintar) {
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  pintar(cv.getContext('2d'), w, h);
+  const tx = new THREE.CanvasTexture(cv);
+  tx.colorSpace = THREE.SRGBColorSpace;
+  tx.anisotropy = 8;
+  return tx;
+}
+
+// ------------------------------------------------------------------ fonda: pared, ventana, barra
+const pared = plano(16, 10, mat(C.crema));
+pared.position.set(0, 2, -3.2);
+pared.receiveShadow = true;
+escena.add(pared);
+
+// Ventana en arco con la Catedral de Guadalajara (torres con agujas amarillas y azules)
+const ventana = plano(3.6, 4.8, new THREE.MeshBasicMaterial({ transparent: true, map: lienzo(600, 800, (g, w, h) => {
+  const arco = (m) => { g.beginPath(); g.moveTo(m, h); g.lineTo(m, 300); g.arc(300, 300, 300 - m, Math.PI, 0); g.lineTo(w - m, h); g.closePath(); };
+  arco(4); g.fillStyle = '#E7B7A3'; g.fill(); g.lineWidth = 6; g.strokeStyle = TXT.contorno; g.stroke();
+  arco(30); g.fillStyle = TXT.talavera; g.fill(); g.stroke();
+  arco(44); g.save(); g.clip();
+  const cielo = g.createLinearGradient(0, 0, 0, h); cielo.addColorStop(0, '#9FD4EE'); cielo.addColorStop(1, '#E6F4FA');
+  g.fillStyle = cielo; g.fillRect(0, 0, w, h);
+  g.fillStyle = '#FFFFFF';
+  for (const [x, y, s] of [[140, 210, 1], [450, 150, 0.8], [520, 330, 0.6]]) {
+    g.beginPath(); g.ellipse(x, y, 60 * s, 24 * s, 0, 0, 7); g.ellipse(x + 40 * s, y - 14 * s, 40 * s, 26 * s, 0, 0, 7); g.fill();
+  }
+  g.lineWidth = 4; g.strokeStyle = TXT.contorno; g.lineJoin = 'round';
+  g.fillStyle = '#9CC98A'; g.beginPath(); g.moveTo(0, 640); g.quadraticCurveTo(160, 560, 320, 620); g.quadraticCurveTo(470, 670, 600, 590);
+  g.lineTo(600, 800); g.lineTo(0, 800); g.fill(); g.stroke();
+  const piedra = '#F0D9C4';
+  const rect = (x, y, w2, h2, c) => { g.fillStyle = c; g.fillRect(x, y, w2, h2); g.strokeRect(x, y, w2, h2); };
+  rect(185, 470, 230, 330, piedra);                                      // fachada
+  g.fillStyle = piedra; g.beginPath(); g.moveTo(185, 470); g.lineTo(300, 395); g.lineTo(415, 470); g.closePath(); g.fill(); g.stroke();
+  g.fillStyle = TXT.contorno; g.beginPath(); g.arc(300, 640, 40, Math.PI, 0); g.lineTo(340, 800); g.lineTo(260, 800); g.fill();
+  g.beginPath(); g.arc(300, 470, 22, 0, 7); g.fill();
+  for (const x of [150, 390]) {                                          // torres
+    rect(x, 360, 60, 440, piedra);
+    rect(x - 6, 350, 72, 18, piedra);
+    g.fillStyle = TXT.contorno; g.fillRect(x + 20, 400, 20, 40); g.fillRect(x + 20, 480, 20, 40);
+    g.save(); g.beginPath(); g.moveTo(x - 4, 350); g.lineTo(x + 30, 175); g.lineTo(x + 64, 350); g.closePath(); g.clip();
+    for (let i = 0; i < 12; i++) { g.fillStyle = i % 2 ? '#2453A6' : '#F2C14E'; g.fillRect(x - 10, 175 + i * 15, 90, 15); }
+    g.restore();
+    g.beginPath(); g.moveTo(x - 4, 350); g.lineTo(x + 30, 175); g.lineTo(x + 64, 350); g.closePath(); g.stroke();
+    g.beginPath(); g.moveTo(x + 30, 175); g.lineTo(x + 30, 150); g.moveTo(x + 22, 160); g.lineTo(x + 38, 160); g.stroke();
+  }
+  g.restore();
+}) }));
+ventana.position.set(0, 2.55, -3.18);
+escena.add(ventana);
+
+// Papel picado: banderitas con agujeros (alphaMap), colores tapatíos, se mecen
+const picado = lienzo(128, 160, (g, w, h) => {
+  g.fillStyle = '#fff'; g.fillRect(0, 0, w, h); g.fillStyle = '#000';
+  g.beginPath(); g.arc(64, 70, 26, 0, 7); g.fill();
+  g.fillStyle = '#fff'; g.beginPath(); g.arc(64, 70, 12, 0, 7); g.fill(); g.fillStyle = '#000';
+  for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2; g.beginPath(); g.arc(64 + Math.cos(a) * 42, 70 + Math.sin(a) * 42, 6, 0, 7); g.fill(); }
+  for (let x = 10; x < w; x += 18) { g.beginPath(); g.moveTo(x, h); g.lineTo(x + 9, h - 18); g.lineTo(x + 18, h); g.fill(); }
+  for (let x = 14; x < w; x += 20) g.fillRect(x, 128, 8, 8);
+});
+picado.colorSpace = THREE.NoColorSpace;
+const COLORES_PICADO = [0xE85D8F, C.jacaranda, C.nopal, C.maiz, C.talavera, C.chile];
+const banderitas = [];
+for (const [fila, y, z, n] of [[0, 4.35, -2.4, 9], [1, 4.0, -1.0, 8]]) {
+  for (let i = 0; i < n; i++) {
+    const x = (i - (n - 1) / 2) * 0.62;
+    const b = plano(0.5, 0.62, mat(COLORES_PICADO[(i + fila * 3) % 6], { alphaMap: picado, alphaTest: 0.5, side: THREE.DoubleSide }));
+    b.geometry.translate(0, -0.31, 0);
+    b.position.set(x, y - 0.08 * (1 - Math.pow(x / 3, 2)), z);
+    b.castShadow = true;
+    escena.add(b);
+    banderitas.push(b);
+  }
+}
+
+// Barra de cantera con frente de talavera
+const barra = caja(8, 1.4, 4, C.cantera, 0.08);
+barra.position.set(0, -0.7, 0.3);
+escena.add(barra);
+const azulejo = lienzo(256, 256, (g, w) => {
+  g.fillStyle = '#F7F3EA'; g.fillRect(0, 0, w, w);
+  g.fillStyle = TXT.talavera; g.strokeStyle = TXT.talavera; g.lineWidth = 10;
+  for (const [x, y] of [[0, 0], [w, 0], [0, w], [w, w]]) { g.beginPath(); g.arc(x, y, 58, 0, 7); g.fill(); }
+  for (let i = 0; i < 4; i++) {
+    g.save(); g.translate(128, 128); g.rotate(i * Math.PI / 2 + Math.PI / 4);
+    g.beginPath(); g.ellipse(0, -52, 20, 40, 0, 0, 7); g.fill(); g.restore();
+  }
+  g.fillStyle = '#F2C14E'; g.beginPath(); g.arc(128, 128, 24, 0, 7); g.fill(); g.stroke();
+  g.strokeStyle = '#2B223060'; g.lineWidth = 4; g.strokeRect(0, 0, w, w);
+});
+azulejo.wrapS = azulejo.wrapT = THREE.RepeatWrapping;
+azulejo.repeat.set(12, 2);
+const frente = plano(8, 1.32, mat(0xFFFFFF, { map: azulejo }));
+frente.position.set(0, -0.72, 2.315);
+frente.receiveShadow = true;
+escena.add(frente);
+
+// Adornos atrás en la barra: nopal en maceta de talavera y jarritos
+const maceta = new THREE.Group();
+const mac = cil(0.32, 0.24, 0.5, C.talavera); mac.position.y = 0.25; maceta.add(mac);
+const pencas = [[0, 0.8, 0, 0.32, 0.42], [-0.28, 1.15, 0.5, 0.22, 0.3], [0.26, 1.2, -0.4, 0.2, 0.28]];
+for (const [x, y, rz, rx, ry] of pencas) {
+  const p = esfera(1, C.nopal); p.scale.set(rx, ry, 0.08); p.position.set(x, y, 0); p.rotation.z = rz; maceta.add(p);
+}
+maceta.position.set(-1.55, 0, -1.1);
+escena.add(maceta);
+const jarritos = new THREE.Group();
+[[0, 0, C.barro], [0.42, 0.05, C.barro], [0.2, 0.34, C.barro]].forEach(([x, z, c], i) => {
+  const j = cil(0.16, 0.13, 0.38, c); j.position.set(x, 0.19 + (i === 2 ? 0 : 0), z - (i === 2 ? 0.35 : 0)); jarritos.add(j);
+  const banda = cil(0.165, 0.165, 0.06, C.maiz); banda.position.copy(j.position); banda.position.y += 0.06; jarritos.add(banda);
+});
+jarritos.position.set(1.3, 0, -1.2);
+escena.add(jarritos);
+
+// ------------------------------------------------------------------ cocinerito de bloques
+const chef = new THREE.Group();
+const torso = caja(1.0, 1.1, 0.56, C.blanco); torso.position.y = 0.35; chef.add(torso);
+const mandil = caja(0.78, 0.82, 0.05, C.chile, 0.02); mandil.position.set(0, 0.22, 0.3); chef.add(mandil);
+const paliacate = caja(0.72, 0.12, 0.6, C.talavera, 0.04); paliacate.position.y = 0.93; chef.add(paliacate);
+const cabeza = new THREE.Group(); cabeza.position.y = 1.0; chef.add(cabeza);
+const cara = caja(0.64, 0.62, 0.6, C.piel, 0.08); cara.position.y = 0.32; cabeza.add(cara);
+for (const x of [-0.14, 0.14]) {
+  const ojo = caja(0.08, 0.11, 0.02, C.contorno, 0.02); ojo.position.set(x, 0.42, 0.31); cabeza.add(ojo);
+  const chapa = caja(0.1, 0.06, 0.02, 0xE88A7A, 0.02); chapa.position.set(x * 1.6, 0.27, 0.305); cabeza.add(chapa);
+}
+const bigote = caja(0.38, 0.09, 0.05, 0x3A2A22, 0.03); bigote.position.set(0, 0.24, 0.31); cabeza.add(bigote);
+const gorro = cil(0.3, 0.27, 0.36, C.blanco); gorro.position.y = 0.8; cabeza.add(gorro);
+const copa = esfera(0.37, C.blanco); copa.scale.set(1, 0.62, 1); copa.position.y = 1.02; cabeza.add(copa);
+const brazos = [-1, 1].map((lado) => {
+  const hombro = new THREE.Group(); hombro.position.set(lado * 0.64, 0.8, 0); chef.add(hombro);
+  const b = caja(0.28, 0.82, 0.3, C.blanco); b.position.y = -0.38; hombro.add(b);
+  const mano = caja(0.24, 0.2, 0.26, C.piel); mano.position.y = -0.86; hombro.add(mano);
+  return hombro;
+});
+chef.position.set(0, 0, -2.2);
+escena.add(chef);
+
+// ------------------------------------------------------------------ plato y torta
+const plato = new THREE.Group();
+const base = cil(1.45, 1.22, 0.1, C.blanco, undefined, 48); base.position.y = 0.05; plato.add(base);
+const borde = toro(1.36, 0.045, C.talavera); borde.rotation.x = Math.PI / 2; borde.position.y = 0.105; plato.add(borde);
+plato.position.set(0, 0, 0.7);
+escena.add(plato);
+
+const charco = cil(1, 1, 0.035, C.salsa, { sombra: false }, 40);
+charco.position.set(0, 0.115, 0.7);
+escena.add(charco);
+
+const torta = new THREE.Group();
+torta.position.set(0, 0.1, 0.7);
+torta.rotation.y = -0.22;
+escena.add(torta);
+const abajo = caja(2.0, 0.3, 0.78, C.pan, 0.12); abajo.position.y = 0.15; torta.add(abajo);
+const migaAbajo = caja(1.84, 0.02, 0.64, C.miga, 0.01); migaAbajo.position.y = 0.3; torta.add(migaAbajo);
+const bisagra = new THREE.Group(); bisagra.position.set(0, 0.3, -0.39); torta.add(bisagra);
+const tapa = caja(2.0, 0.44, 0.78, C.costra, 0.19); tapa.position.set(0, 0.22, 0.39); bisagra.add(tapa);
+const migaArriba = caja(1.84, 0.02, 0.64, C.miga, 0.01); migaArriba.position.set(0, 0.01, 0.39); bisagra.add(migaArriba);
+for (const x of [-0.55, 0, 0.55]) {
+  const g = caja(0.38, 0.05, 0.11, 0xF0C070, 0.025); g.position.set(x, 0.44, 0.39); g.rotation.y = 0.6; bisagra.add(g);
+}
+
+const CARNE = [0xA85A2A, 0xC0703A, 0x8E4A22];
+const carnitas = Array.from({ length: 10 }, (_, i) => {
+  const c = caja(0.24 + azar(i) * 0.08, 0.16 + azar(i + 9) * 0.06, 0.2 + azar(i + 4) * 0.06, CARNE[i % 3], 0.05);
+  const capa = i >= 6 ? 1 : 0;
+  c.userData.fin = new THREE.Vector3(-0.72 + (i % 6) * 0.29 + (capa ? 0.15 : 0), 0.4 + capa * 0.1, (azar(i + 2) - 0.5) * 0.36);
+  c.userData.giro = new THREE.Euler(azar(i + 5) * 0.6, azar(i + 6) * 3, azar(i + 7) * 0.6);
+  torta.add(c);
+  return c;
+});
+
+// Salsa de jitomate: capa que baja de arriba hacia abajo (plano de recorte en coordenadas del mundo)
+const nivelSalsa = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const salsa = caja(2.07, 0.8, 0.85, C.salsa, 0.21, {
+  material: mat(C.salsa, { clippingPlanes: [nivelSalsa] }), contorno: matContorno({ clippingPlanes: [nivelSalsa] }),
+});
+salsa.position.y = 0.37;
+torta.add(salsa);
+const gotas = [[-0.8, 0.44], [-0.3, 0.44], [0.4, 0.44], [0.85, 0.44], [-0.55, -0.44], [0.2, -0.44]].map(([x, z]) => {
+  const g = esfera(0.06, C.salsa); g.position.set(x, 0.12, z); torta.add(g); return g;
+});
+
+const splats = [[-0.6, 0.1], [-0.15, -0.15], [0.3, 0.12], [0.7, -0.1], [0.05, 0.2]].map(([x, z]) => {
+  const s = esfera(0.075, 0xA3241A); s.userData.fin = new THREE.Vector3(x, 0.83, z); torta.add(s); return s;
+});
+const aros = [[-0.6, -0.05, 0.3], [-0.2, 0.12, -0.2], [0.25, -0.1, 0.5], [0.62, 0.08, -0.4], [0.0, 0.0, 0.1]].map(([x, z, r], i) => {
+  const a = toro(0.13, 0.035, C.cebolla); a.userData.fin = new THREE.Vector3(x, 0.8 + i * 0.012, z); a.userData.inclina = r;
+  torta.add(a); return a;
+});
+
+// Jarro de barro (vierte la salsa) y botellita de chile de árbol
+const jarro = new THREE.Group();
+const cuerpo = cil(0.34, 0.42, 0.72, C.barro); jarro.add(cuerpo);
+const bandaJ = cil(0.39, 0.39, 0.1, C.maiz); bandaJ.position.y = 0.05; jarro.add(bandaJ);
+const boca = toro(0.32, 0.05, C.barro); boca.rotation.x = Math.PI / 2; boca.position.y = 0.36; jarro.add(boca);
+const asa = toro(0.17, 0.05, C.barro); asa.position.set(0.42, 0.05, 0); jarro.add(asa);
+const salsaJarro = cil(0.3, 0.3, 0.02, C.salsa); salsaJarro.position.y = 0.33; jarro.add(salsaJarro);
+escena.add(jarro);
+const chorro = cil(0.07, 0.07, 1, C.salsa, { sombra: false }, 16);
+escena.add(chorro);
+
+const botella = new THREE.Group();
+const vidrio = cil(0.13, 0.16, 0.52, C.chileOscuro); botella.add(vidrio);
+const rotulo = cil(0.165, 0.165, 0.2, C.maiz); rotulo.position.y = -0.04; botella.add(rotulo);
+const cuello = cil(0.06, 0.1, 0.16, C.chileOscuro); cuello.position.y = 0.33; botella.add(cuello);
+const tapon = cil(0.065, 0.065, 0.06, C.blanco); tapon.position.y = 0.43; botella.add(tapon);
+escena.add(botella);
+const gotitas = splats.map(() => { const g = esfera(0.06, C.chileOscuro); escena.add(g); return g; });
+
+// ------------------------------------------------------------------ textos (capa 2D encima del 3D)
+const hud = document.createElement('canvas');
+hud.width = W; hud.height = H;
+const ctx = hud.getContext('2d');
+const hudTex = new THREE.CanvasTexture(hud);
+hudTex.colorSpace = THREE.SRGBColorSpace;
+const capaHud = new THREE.Scene();
+capaHud.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: hudTex, transparent: true, depthTest: false })));
+const camHud = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+function texto(str, x, y, tam, relleno, escala = 1, giro = 0, alinear = 'center') {
+  if (escala <= 0.001) return;
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate(giro); ctx.scale(escala, escala);
+  ctx.font = `${tam}px Lilita`;
+  ctx.textAlign = alinear; ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = tam * 0.24; ctx.strokeStyle = TXT.contorno; ctx.strokeText(str, 0, 0);
+  ctx.fillStyle = relleno; ctx.fillText(str, 0, 0);
+  ctx.restore();
+}
+
+const enPantalla = (v) => { const p = v.clone().project(camara); return [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H]; };
+
+// Etiqueta con línea y puntito (estilo plano técnico): número en círculo de talavera + nombre subrayado en maíz
+function etiqueta(t, t0, t1, n, nombre, ancla, dx, dy) {
+  if (t < t0 || t > t1) return;
+  const [ax, ay] = enPantalla(ancla);
+  const entra = salida((t - t0) / 0.35), sale = 1 - suave(t1 - 0.25, t1, t);
+  const k = entra * sale;
+  ctx.font = '62px Lilita';
+  const ancho = ctx.measureText(nombre).width + 84;
+  const lx = Math.min(1040 - ancho / 2, Math.max(40 + ancho / 2, ax + dx)), ly = ay + dy;
+  const subY = ly + 44;
+  // línea del puntito al subrayado
+  const px = lerp(ax, lx, k), py = lerp(ay, subY, k);
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = TXT.contorno; ctx.lineWidth = 11; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(px, py); ctx.stroke();
+  ctx.strokeStyle = TXT.maiz; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(px, py); ctx.stroke();
+  const r = 15 * rebote((t - t0) / 0.3) * sale;
+  ctx.fillStyle = TXT.maiz; ctx.strokeStyle = TXT.contorno; ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.arc(ax, ay, Math.max(0, r), 0, 7); ctx.fill(); ctx.stroke();
+  const e = rebote((t - t0 - 0.12) / 0.35) * sale;
+  if (e <= 0.01) return;
+  ctx.save(); ctx.translate(lx, ly); ctx.scale(e, e);
+  ctx.fillStyle = TXT.contorno; ctx.fillRect(-ancho / 2 - 6, 34, ancho + 12, 20);
+  ctx.fillStyle = TXT.maiz; ctx.fillRect(-ancho / 2, 39, ancho, 10);
+  const cx = -ancho / 2 + 30;
+  ctx.fillStyle = TXT.talavera; ctx.strokeStyle = TXT.contorno; ctx.lineWidth = 6;
+  ctx.beginPath(); ctx.arc(cx, 0, 30, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.restore();
+  texto(String(n), lx + (cx) * e, ly + 2 * e, 42, TXT.blanco, e);
+  texto(nombre, lx + (cx + 44) * e, ly, 62, TXT.blanco, e, 0, 'left');
+}
+
+// ------------------------------------------------------------------ cuadro
+const v3 = new THREE.Vector3();
+window.cargar = (d) => { EV = d.ev; CAIDA = d.caida; };
+
+window.dibujar = (t) => {
+  // cámara: se acerca despacio y al final da media vuelta
+  const golpes = [EV.birote + CAIDA, EV.cerrar + 0.35, EV.ahogada];
+  let temblor = 0;
+  for (const g of golpes) if (t > g) temblor += 0.05 * Math.exp(-(t - g) * 12) * Math.sin((t - g) * 60);
+  const ang = -0.16 + 0.025 * t + 0.42 * suave(EV.lista, EV.lista + 1.65, t) * (t > EV.lista ? 1 : 0);
+  const R = 7.4 - 0.1 * t;
+  const mira = new THREE.Vector3(0, 0.95, 0.3);
+  camara.position.set(Math.sin(ang) * R, 3.15 + temblor, 0.3 + Math.cos(ang) * R);
+  camara.lookAt(mira);
+
+  // papel picado
+  banderitas.forEach((b, i) => { b.rotation.x = 0.18 * Math.sin(t * 2.2 + i * 0.9); });
+
+  // torta: cae, se abre, carnitas, se cierra
+  const cb = caida(t, EV.birote, 6);
+  torta.visible = cb.visible;
+  torta.position.y = 0.1 + cb.y;
+  aplastar(torta, cb.sq);
+  const abre = rebote((t - EV.abrir) / 0.5) * (1 - rebote((t - EV.cerrar) / 0.4));
+  bisagra.rotation.x = -1.2 * abre;
+  carnitas.forEach((c, i) => {
+    const cc = caida(t, EV.carnitas[i], 3);
+    c.visible = cc.visible;
+    c.position.copy(c.userData.fin); c.position.y += cc.y;
+    c.rotation.set(c.userData.giro.x + cc.y * 1.5, c.userData.giro.y + cc.y * 2, c.userData.giro.z);
+    aplastar(c, cc.sq);
+  });
+
+  // jarro: entra, vierte, se va
+  const jEntra = salida((t - EV.jarro) / 0.4), jSale = suave(EV.ahogada + 0.1, EV.ahogada + 0.55, t);
+  jarro.visible = t > EV.jarro && jSale < 1;
+  jarro.position.set(lerp(3.2, 1.3, jEntra) + 2 * jSale, lerp(4.5, 2.15, jEntra) + 2.5 * jSale, 0.75);
+  const vierte = suave(EV.vertir - 0.1, EV.vertir + 0.25, t) * (1 - suave(EV.ahogada - 0.1, EV.ahogada + 0.2, t));
+  jarro.rotation.z = 1.75 * vierte + 0.1 * Math.sin(t * 8) * vierte;
+  salsaJarro.visible = t < EV.ahogada;
+  escena.updateMatrixWorld();
+  const pico = jarro.localToWorld(v3.set(-0.36, 0.36, 0));
+  const fluye = suave(EV.vertir + 0.1, EV.vertir + 0.2, t) * (1 - suave(EV.ahogada - 0.15, EV.ahogada, t));
+  chorro.visible = fluye > 0.01 && jarro.visible;
+  const fondo = 0.95;
+  chorro.position.set(pico.x, (pico.y + fondo) / 2, pico.z);
+  chorro.scale.set(fluye * (1 + 0.15 * Math.sin(t * 40)), Math.max(0.01, pico.y - fondo), fluye * (1 + 0.15 * Math.sin(t * 40)));
+
+  const nivel = lerp(1.05, -0.02, suave(EV.vertir + 0.15, EV.ahogada, t));
+  nivelSalsa.constant = -nivel;
+  salsa.visible = t > EV.vertir + 0.1;
+  const charcoK = salida((t - EV.vertir - 0.4) / 1.0);
+  charco.visible = charcoK > 0.01;
+  charco.scale.set(charcoK * 1.18, 1, charcoK * 1.18);
+  gotas.forEach((g, i) => {
+    const k = salida((t - EV.ahogada + 0.2 - i * 0.05) / 0.4);
+    g.visible = k > 0.01; g.scale.set(k, k * 1.8, k);
+  });
+
+  // chile de árbol: botellita que entra, gotas que caen y se aplastan
+  const bEntra = salida((t - EV.chile[0] + 0.45) / 0.4), bSale = suave(EV.chile[4] + 0.45, EV.chile[4] + 0.85, t);
+  botella.visible = bEntra > 0 && bSale < 1;
+  botella.position.set(lerp(-3.4, -1.15, bEntra) - 2 * bSale, lerp(4.2, 1.95, bEntra) + 2 * bSale, 0.8);
+  botella.rotation.z = -2.2 * salida((t - EV.chile[0] + 0.15) / 0.3) * (1 - bSale) + 0.08 * Math.sin(t * 14) * bEntra;
+  escena.updateMatrixWorld();
+  const punta = botella.localToWorld(new THREE.Vector3(0, 0.48, 0));
+  splats.forEach((s, i) => {
+    const t0 = EV.chile[i], u = (t - t0) / 0.35;
+    const fin = torta.localToWorld(s.userData.fin.clone());
+    gotitas[i].visible = u > 0 && u < 1;
+    if (gotitas[i].visible) gotitas[i].position.set(lerp(punta.x, fin.x, u), lerp(punta.y, fin.y, u * u), lerp(punta.z, fin.z, u));
+    const k = (t - t0 - 0.35);
+    s.visible = k > 0;
+    s.position.copy(s.userData.fin);
+    const sq = k > 0 ? 1 - 0.5 * Math.exp(-k * 10) * Math.cos(k * 25) : 1;
+    s.scale.set(1.4 * (2 - sq), 0.55 * sq, 1.4 * (2 - sq));
+  });
+
+  // cebolla curtida: aros que caen girando y se acuestan
+  aros.forEach((a, i) => {
+    const ca = caida(t, EV.cebolla[i], 2.5);
+    a.visible = ca.visible;
+    a.position.copy(a.userData.fin); a.position.y += ca.y;
+    const gira = ca.y * 2.2;
+    a.rotation.set(Math.PI / 2 + gira + 0.12 * a.userData.inclina, 0, gira * 0.5 + 0.1 * a.userData.inclina);
+    aplastar(a, ca.sq);
+  });
+
+  // cocinerito: rebota al pulso, voltea a la acción, señala cada paso y festeja al final
+  chef.position.y = 0.04 * Math.abs(Math.sin(t * Math.PI * 2));
+  const fiesta = suave(EV.lista, EV.lista + 0.35, t);
+  const gA = Math.max(gesto(t, EV.birote + 0.4), gesto(t, EV.cerrar), gesto(t, EV.chile[0]));
+  const gB = Math.max(gesto(t, EV.carnitas[0]), gesto(t, EV.jarro), gesto(t, EV.cebolla[0]));
+  const ola = Math.sin(t * 14) * 0.25;
+  brazos[0].rotation.set(-1.35 * gA * (1 - fiesta), 0, lerp(-0.12 - 0.35 * gA, -2.6 + ola, fiesta));
+  brazos[1].rotation.set(-1.35 * gB * (1 - fiesta), 0, lerp(0.12 + 0.35 * gB, 2.6 - ola, fiesta));
+  const mirada = 0.45 * (suave(EV.jarro, EV.jarro + 0.3, t) - suave(EV.ahogada, EV.ahogada + 0.3, t))
+    - 0.45 * (suave(EV.chile[0] - 0.4, EV.chile[0] - 0.1, t) - suave(EV.chile[4] + 0.3, EV.chile[4] + 0.6, t));
+  cabeza.rotation.set(0.22 * (1 - fiesta) + 0.05 * Math.sin(t * Math.PI * 2), mirada, 0);
+
+  renderer.clear();
+  renderer.render(escena, camara);
+
+  // ---------------------------------------------------------------- textos
+  ctx.clearRect(0, 0, W, H);
+  const viñeta = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.62);
+  viñeta.addColorStop(0, 'rgba(43,34,48,0)'); viñeta.addColorStop(1, 'rgba(43,34,48,0.16)');
+  ctx.fillStyle = viñeta; ctx.fillRect(0, 0, W, H);
+
+  const pop = (t0) => rebote((t - t0) / 0.45);
+  const salto = 1 + 0.1 * Math.sin(clamp((t - EV.lista) / 0.4) * Math.PI);
+  texto('ASÍ SE ARMA UNA', W / 2, 250, 62, TXT.blanco, pop(0.0));
+  texto('TORTA AHOGADA', W / 2, 365, 128, TXT.maiz, pop(0.12) * salto, -0.02);
+
+  escena.updateMatrixWorld();
+  const enTorta = (x, y, z) => torta.localToWorld(new THREE.Vector3(x, y, z));
+  etiqueta(t, EV.birote + 0.5, EV.abrir + 0.55, 1, 'BIROTE SALADO', enTorta(-0.5, 0.6, 0.3), -60, -300);
+  etiqueta(t, EV.carnitas[2], EV.cerrar + 0.1, 2, 'CARNITAS', enTorta(0.35, 0.45, 0), 120, -330);
+  etiqueta(t, EV.vertir + 0.3, EV.chile[0] - 0.2, 3, 'SALSA DE JITOMATE', enTorta(-0.7, 0.35, 0.47), 60, 330);
+  etiqueta(t, EV.chile[1], EV.cebolla[0] - 0.1, 4, 'CHILE DE ÁRBOL', enTorta(-0.15, 0.82, -0.15), -40, -330);
+  etiqueta(t, EV.cebolla[1], EV.lista + 0.1, 5, 'CEBOLLA CURTIDA', enTorta(0.25, 0.85, -0.1), 40, -330);
+
+  if (t > EV.ahogada - 0.05 && t < EV.chile[0] + 0.15) {
+    const k = rebote((t - EV.ahogada + 0.05) / 0.35) * (1 - suave(EV.chile[0] - 0.15, EV.chile[0] + 0.15, t));
+    texto('¡AHOGADA!', W / 2, 590, 150, TXT.chile, k, -0.08);
+  }
+  if (t > EV.lista) {
+    texto('¡A COMER!', W / 2, 1490, 140, TXT.maiz, rebote((t - EV.lista - 0.15) / 0.45), -0.07);
+  }
+  hudTex.needsUpdate = true;
+  renderer.render(capaHud, camHud);
+};
+
+const fuente = new FontFace('Lilita', 'url(/fuentes/LilitaOne-Regular.ttf)');
+await fuente.load();
+document.fonts.add(fuente);
+window.listo = true;
+</script>
+</body>
+</html>

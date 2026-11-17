@@ -300,6 +300,7 @@
         <option value="bolitas">🔵 Bolitas</option>
         <option value="podcast">🎙️ Podcast</option>
         <option value="caricatura">🐦 Caricatura</option>
+        <option value="beats">🥁 Beats</option>
       </select>
       <button class="ghost" type="submit">Agregar</button>
     </form>
@@ -346,6 +347,10 @@ const TYPES = [
   ["bolitas", "🔵 Bolitas"],
   ["podcast", "🎙️ Podcast"],
   ["caricatura", "🐦 Caricatura"],
+  ["beats", "🥁 Beats"],
+  ["cineclub", "🎬 Cineclub"],
+  ["tienda", "🛍️ Tienda"],
+  ["otros", "🧩 Otros"],
 ];
 const TYPE_ICON = Object.fromEntries(TYPES.map(([t, l]) => [t, l.split(" ")[0]]));
 const ESTADOS = [
@@ -500,7 +505,7 @@ function videoCard(v) {
       <div class="meta">
         <div>
           <div class="title">${v.carpeta === "pruebas" ? "🧪 " : ""}${esc(v.titulo || prettyName(v.name))}</div>
-          <div class="file">${esc(v.carpeta)}/${esc(v.name)} · ${(v.size / 1048576).toFixed(1)} MB</div>
+          <div class="file">${esc(v.ruta)} · ${(v.size / 1048576).toFixed(1)} MB</div>
         </div>
         <div class="badges">
           ${dur ? `<span class="badge">${dur}</span>` : ""}

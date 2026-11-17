@@ -410,7 +410,7 @@ def main():
 
     midi_path = Path(args.midi)
     titulo = args.titulo or midi_path.stem.replace("-", " ").title()
-    out = Path(args.salida) if args.salida else ROOT / "out" / "videos" / f"{midi_path.stem}.mp4"
+    out = Path(args.salida) if args.salida else ROOT / "out" / "videos" / "piano" / f"{midi_path.stem}.mp4"
     out.parent.mkdir(parents=True, exist_ok=True)
 
     notes, events = load_midi(midi_path)

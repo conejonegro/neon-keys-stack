@@ -9,8 +9,8 @@ Hay dos versiones (PRESETS): "corto" (10 s, la prueba original) y "largo" (70 s,
 el hueco empieza chico y se va abriendo para que el caos llegue cerca del final).
 
 Uso:
-    .venv/bin/python rebotes.py                  # genera out/videos/rebotes-la-bamba.mp4
-    .venv/bin/python rebotes.py --version largo  # genera out/videos/rebotes-la-bamba-largo.mp4
+    .venv/bin/python rebotes.py                  # genera out/videos/bolitas/rebotes-la-bamba.mp4
+    .venv/bin/python rebotes.py --version largo  # genera out/videos/bolitas/rebotes-la-bamba-largo.mp4
     .venv/bin/python rebotes.py --preview 6      # solo un cuadro PNG en t=6s
     .venv/bin/python rebotes.py --stats          # solo simula e imprime cuántas bolitas hay
 """
@@ -78,7 +78,7 @@ def configure(name):
     GLITCH_START, FREEZE_START, END_CARD = DURATION - 2.0, DURATION - 1.0, DURATION - 0.7
     SEED, SPAWN, GROW, FULL_AT = p["seed"], p["spawn"], p["grow"], p["full"]
     GAP_START, GAP_END = math.radians(p["gap"][0]), math.radians(p["gap"][1])
-    return ROOT / "out" / "videos" / p["salida"]
+    return ROOT / "out" / "videos" / "bolitas" / p["salida"]
 
 
 def gap_angle(t):

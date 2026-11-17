@@ -55,28 +55,28 @@ Genera 2 o 3 cuadros y míralos con Read antes del render completo:
   --inicio X --duracion Y --preview 5
 ```
 
-El PNG queda junto a la salida (`out/videos/CANCION.preview-5s.png`). Revisa: título dentro de la zona segura
+El PNG queda junto a la salida (`out/videos/piano/CANCION.preview-5s.png`). Revisa: título dentro de la zona segura
 (y≈230), nada importante por debajo de y=1600, teclado y colores sin cambios respecto al look aprobado.
 Borra los PNG de vista previa al terminar.
 
 ## 5. Render completo
 
 Mismo comando sin `--preview`. Si el video dura más de ~30 s, córrelo **en segundo plano**
-(`run_in_background`). Escribe en `out/.tmp/` y se mueve a `out/videos/` al terminar (un clip de prueba o teaser: `--salida out/pruebas/CANCION-prueba.mp4`): **no abras ni sirvas el
+(`run_in_background`). Escribe en `out/.tmp/` y se mueve a `out/videos/piano/` al terminar (un clip de prueba o teaser: `--salida out/pruebas/piano/CANCION-prueba.mp4`): **no abras ni sirvas el
 `.mp4` mientras se genera**.
 
 ## 6. Verificar
 
 ```bash
-ffmpeg -v error -i out/videos/CANCION.mp4 -f null - 2>&1 | wc -l    # debe dar 0
-ffprobe -v error -show_entries format=duration -of csv=p=0 out/videos/CANCION.mp4
+ffmpeg -v error -i out/videos/piano/CANCION.mp4 -f null - 2>&1 | wc -l    # debe dar 0
+ffprobe -v error -show_entries format=duration -of csv=p=0 out/videos/piano/CANCION.mp4
 ```
 
 Extrae y mira cuadros de inicio, mitad, clímax y cierre:
 
 ```bash
 for t in 1 MITAD CLIMAX FINAL; do
-  ffmpeg -v error -y -ss $t -i out/videos/CANCION.mp4 -frames:v 1 "$SCRATCHPAD/cuadro-$t.png"
+  ffmpeg -v error -y -ss $t -i out/videos/piano/CANCION.mp4 -frames:v 1 "$SCRATCHPAD/cuadro-$t.png"
 done
 ```
 

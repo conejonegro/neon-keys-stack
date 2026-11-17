@@ -7,7 +7,7 @@ Los personajes son las tiras de caminata hechas con IA y limpiadas con `pixel_ia
 se hacen con código. La voz se pone después en TikTok, como en los datos curiosos.
 
 Uso:
-    .venv/bin/python podcast.py                 # → out/pruebas/podcast-chivas-atlas-prueba.mp4
+    .venv/bin/python podcast.py                 # → out/pruebas/podcast/podcast-chivas-monterrey.mp4
     .venv/bin/python podcast.py --preview 4     # solo un cuadro PNG en t=4 s
 """
 
@@ -26,7 +26,7 @@ from neon_keys import (COLOR_LEFT, COLOR_RIGHT, FONT_BOLD, FONT_TEXT, FPS, H, SA
                        glow_text, make_brand_layer)
 
 ROOT = Path(__file__).resolve().parent
-OUTPUT = ROOT / "out" / "pruebas" / "podcast-chivas-atlas-prueba.mp4"
+OUTPUT = ROOT / "out" / "pruebas" / "podcast" / "podcast-chivas-monterrey.mp4"
 
 PX = 6                          # cada pixel del escenario mide 6×6 en el video
 SW, SH = W // PX, H // PX       # 180 × 320
@@ -36,7 +36,7 @@ PASO = 0.11                     # segundos por cuadro de la caminata
 VEL_SUELO = 13.0                # avance de la cuadrícula del piso (unidades de mundo por segundo)
 VEL_CIUDAD = 6.0                # avance de la ciudad a lo lejos (pixeles chicos por segundo)
 
-TITULO, SUBTITULO = "CHIVAS vs ATLAS", "¿Y EL PENAL?"
+TITULO, SUBTITULO = "CHIVAS 1-0 MTY", "¿ALMEIDA TRAIDOR?"
 WHITE = (255, 255, 255)
 INK = (24, 10, 44)
 
@@ -52,11 +52,46 @@ PERSONAJES = {
 # (quién, texto del globo, voz). La voz es un audio (wav/mp3) por frase; si falta el archivo
 # esa línea sale solo con texto. Los tiempos salen de la duración de cada voz.
 DIALOGO = [
-    ("luis", "¿Viste el clásico? ¡Nos robaron, wey!", "out/pruebas/voces/chivas-penal-dialogo-luis-1.mp3"),
-    ("alan", "¡Era penal clarísimo y no lo marcaron!", "out/pruebas/voces/chivas-penal-dialogo-alan-2.mp3"),
-    ("luis", "¡Con ese penal, Chivas se lo llevaba!", "out/pruebas/voces/chivas-penal-dialogo-luis-3.mp3"),
+    ("luis", "¡Ganamos uno a cero en Monterrey, wey, y aun así ando bien encabronado!",
+     "out/pruebas/voces/chivas-monterrey-luis-1.wav"),
+    ("alan", "¿Encabronado por qué, cabrón? ¡El Piojo la metió luego luego!",
+     "out/pruebas/voces/chivas-monterrey-alan-2.wav"),
+    ("luis", "¡Por Almeida, wey! ¡Todo el estadio aplaudiéndole como si fuera santo!",
+     "out/pruebas/voces/chivas-monterrey-luis-3.wav"),
+    ("alan", "¡Ah no, pero el Toro Guzmán nos regaló el gol! ¡Ese wey juega para nosotros!",
+     "out/pruebas/voces/chivas-monterrey-alan-4.wav"),
+    ("luis", "Y luego el penal. Yo ya estaba rezando, wey, te lo juro.",
+     "out/pruebas/voces/chivas-monterrey-luis-5.wav"),
+    ("alan", "¡Pero lo tiró Campos! ¡Segundo penal fallado seguido! ¡Hasta su afición le gritaba \"tíralo normal, pendejo\"!",
+     "out/pruebas/voces/chivas-monterrey-alan-6.wav"),
+    ("luis", "Ese cabrón cobra penales como si estuviera en el Mundial de Fortnite.",
+     "out/pruebas/voces/chivas-monterrey-luis-7.wav"),
+    ("alan", "¡Y el Rossy le dio una patada al abanderado y todavía se tiró, wey! ¡Qué descaro!",
+     "out/pruebas/voces/chivas-monterrey-alan-8.wav"),
+    ("luis", "Eso no es fútbol, es telenovela de las nueve.",
+     "out/pruebas/voces/chivas-monterrey-luis-9.wav"),
+    ("alan", "¡Y se soltó el diluvio! ¡Yo pensé que eran mis lágrimas!",
+     "out/pruebas/voces/chivas-monterrey-alan-10.wav"),
+    ("luis", "Luego Orbelín se va expulsado al 89. ¡Ahí sí se me bajó la presión, cabrón!",
+     "out/pruebas/voces/chivas-monterrey-luis-11.wav"),
+    ("alan", "¡Y al 95 el pinche Rossy mete el empate! ¡Yo ya iba a romper la tele!",
+     "out/pruebas/voces/chivas-monterrey-alan-12.wav"),
+    ("luis", "Y entonces… ¡el VAR! ¡Mano clarísima! ¡Anulado, hijos de su madre!",
+     "out/pruebas/voces/chivas-monterrey-luis-13.wav"),
+    ("alan", "¡Pero lo peor fue Almeida, wey! ¡Festejó el gol como loco! ¡Contra nosotros!",
+     "out/pruebas/voces/chivas-monterrey-alan-14.wav"),
+    ("luis", "¡Nos juró amor eterno y lo festeja en nuestra cara! ¡Traidor de mierda!",
+     "out/pruebas/voces/chivas-monterrey-luis-15.wav"),
+    ("alan", "¡Y luego se hizo expulsar para no dar la conferencia! ¡Puro teatro, cabrón!",
+     "out/pruebas/voces/chivas-monterrey-alan-16.wav"),
+    ("luis", "Y la prensa regia diciendo que nos regaló el partido. ¡Lloren, pinches llorones!",
+     "out/pruebas/voces/chivas-monterrey-luis-17.wav"),
+    ("alan", "¡Tercer lugar, empatados con Cruz Azul! ¡Vamos por todo, chingada madre!",
+     "out/pruebas/voces/chivas-monterrey-alan-18.wav"),
+    ("luis", "Almeida, te perdono… pero nomás si te eliminamos en la liguilla.",
+     "out/pruebas/voces/chivas-monterrey-luis-19.wav"),
 ]
-SILBATO_ANTES = 1                # el silbatazo suena justo antes de esta línea (la del penal)
+SILBATO_ANTES = 12               # el silbatazo suena justo antes de esta línea (la del VAR)
 INICIO, PAUSA, PAUSA_SILBATO, FINAL = 0.5, 0.35, 0.9, 1.2
 LETRAS_POR_SEG = 22             # para las líneas sin voz
 GLOBO_Y = 432                   # parte de arriba del globo (debajo del título)

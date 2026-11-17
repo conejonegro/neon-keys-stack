@@ -1,5 +1,5 @@
 // Graba una escena 3D cuadro por cuadro con Chrome invisible y arma el .mp4 con ffmpeg.
-// Uso: node grabar.js escenas/prueba.html out/pruebas/prueba-3d.mp4 [--segundos N] [--preview T]
+// Uso: node grabar.js escenas/prueba.html out/pruebas/otros/prueba-3d.mp4 [--segundos N] [--preview T]
 //        [--datos out/.tmp/X.json --audio out/.tmp/X.wav]   (los genera preparar.py)
 // El video se escribe en out/.tmp/ y se mueve a su destino (out/videos/ u out/pruebas/) solo al terminar.
 import http from 'node:http';

@@ -84,7 +84,7 @@ Regla: cian y magenta dominan siempre. Los acentos nunca pasan de ~1/3 de la pan
 
 ## 8. Un ejemplo bien hecho, toma por toma
 
-`out/videos/rebotes-esfera-3d.mp4` (1:10, "increíble" según el dueño):
+`out/videos/bolitas/rebotes-esfera-3d.mp4` (1:10, "increíble" según el dueño):
 
 1. **0 s**: la esfera neón de alambre ya gira con una bolita dentro. Título arriba. Cada rebote es una
    nota pluck con eco.

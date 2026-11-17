@@ -25,8 +25,8 @@ ROOT = Path(__file__).resolve().parent
 MIDI_DIR = ROOT / "midi"
 OUT_DIR = ROOT / "out"
 PREVIEW_DIR = OUT_DIR / ".preview"
-VIDEOS_DIR = OUT_DIR / "videos"       # videos terminados
-PRUEBAS_DIR = OUT_DIR / "pruebas"     # pruebas y teasers
+VIDEOS_DIR = OUT_DIR / "videos"       # videos terminados, en una subcarpeta por tipo (piano/, beats/, datos/…)
+PRUEBAS_DIR = OUT_DIR / "pruebas"     # pruebas y teasers, también por tipo
 VIDEO_DIRS = (VIDEOS_DIR, PRUEBAS_DIR)
 META_FILE = OUT_DIR / "videos.json"   # descripción, hashtags y estado de publicación de cada video
 IDEAS_FILE = OUT_DIR / "ideas.json"   # ideas para los próximos videos + plantilla del prompt para IA de video
@@ -51,12 +51,20 @@ durations = {}   # (nombre, mtime) → segundos
 PROGRESS_RE = re.compile(r"([\d.]+)s / ([\d.]+)s")
 
 
-# Tipo de video según el inicio del nombre del archivo; lo que no coincide es de piano.
-VIDEO_TYPES = (("dato-", "datos"), ("rebotes-", "bolitas"), ("podcast-", "podcast"), ("caricatura-", "caricatura"))
+# Tipo de video: la subcarpeta donde está (videos/beats/, pruebas/datos/…). Si está suelto, el inicio del nombre
+# del archivo; lo que no coincide es de piano.
+VIDEO_TYPES = (("dato-", "datos"), ("rebotes-", "bolitas"), ("podcast-", "podcast"), ("caricatura-", "caricatura"), ("beat-", "beats"))
 
 
-def video_type(name):
-    return next((t for prefix, t in VIDEO_TYPES if name.startswith(prefix)), "piano")
+def video_type(path):
+    if path.parent not in VIDEO_DIRS:
+        return path.parent.name
+    return next((t for prefix, t in VIDEO_TYPES if path.name.startswith(prefix)), "piano")
+
+
+def all_videos():
+    """Todos los .mp4 de videos/ y pruebas/, con sus subcarpetas (menos voces/)."""
+    return [p for d in VIDEO_DIRS for p in d.rglob("*.mp4") if "voces" not in p.relative_to(d).parts]
 
 
 def load_meta():
@@ -105,16 +113,16 @@ def slugify(text):
 
 
 def find_video(name):
-    """Ruta de un video por su nombre, esté en videos/ o en pruebas/ (los nombres no se repiten)."""
+    """Ruta de un video por su nombre, en cualquier carpeta de videos/ o pruebas/ (los nombres no se repiten)."""
     name = secure_filename(name)
-    return next((d / name for d in VIDEO_DIRS if (d / name).is_file() and name.endswith(".mp4")), None)
+    return next((p for p in all_videos() if p.name == name), None)
 
 
 def unique_output(name):
-    path = VIDEOS_DIR / f"{name}.mp4"
+    path = VIDEOS_DIR / "piano" / f"{name}.mp4"
     i = 2
     while path.exists() or find_video(path.name):
-        path = VIDEOS_DIR / f"{name}-{i}.mp4"
+        path = VIDEOS_DIR / "piano" / f"{name}-{i}.mp4"
         i += 1
     return path
 
@@ -261,16 +269,15 @@ def list_videos():
     busy = {j["video"] for j in jobs.values() if j["status"] == "running"}
     meta = load_meta()
     items = []
-    todos = [p for d in VIDEO_DIRS for p in d.glob("*.mp4")]
-    for p in sorted(todos, key=lambda p: p.stat().st_mtime, reverse=True):
+    for p in sorted(all_videos(), key=lambda p: p.stat().st_mtime, reverse=True):
         if p.name in busy:
             continue
         st = p.stat()
         dur = video_duration(p, st.st_mtime)
         info = {"estado": "listo", "ia": False} | meta.get(p.name, {})
-        carpeta = p.parent.name
-        items.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime, "type": video_type(p.name),
-                      "carpeta": carpeta, "url": f"/out/{carpeta}/{p.name}",
+        ruta = p.relative_to(OUT_DIR).as_posix()
+        items.append({"name": p.name, "size": st.st_size, "mtime": st.st_mtime, "type": video_type(p),
+                      "carpeta": ruta.split("/")[0], "ruta": ruta, "url": f"/out/{ruta}",
                       "duration": dur, "monetizable": bool(dur and dur >= MIN_MONETIZABLE)} | info)
     return jsonify(items)
 

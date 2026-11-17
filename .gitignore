@@ -7,3 +7,5 @@ out/
 modelos/
 *.log
 .hyperframes/
+.venv-synth/
+plugins/

@@ -40,10 +40,10 @@ Detalle y fuentes de las reglas de Creator Rewards: `docs/TIKTOK.md` (incluye ch
 ## Render y entrega
 
 11. Nunca abrir ni servir un `.mp4` mientras se está generando. El render escribe en `out/.tmp/` y se mueve a
-    `out/videos/` (terminados) u `out/pruebas/` (pruebas) solo al terminar (un archivo se corrompió cuando se abrió en QuickTime a medio escribir).
+    `out/videos/<tipo>/` (terminados) u `out/pruebas/<tipo>/` (pruebas) solo al terminar (un archivo se corrompió cuando se abrió en QuickTime a medio escribir).
 12. Antes de entregar un video, **verificar** que esté sano:
     ```bash
-    ffmpeg -v error -i out/videos/VIDEO.mp4 -f null - 2>&1 | wc -l   # debe dar 0
+    ffmpeg -v error -i out/videos/TIPO/VIDEO.mp4 -f null - 2>&1 | wc -l   # debe dar 0
     ```
     y revisar visualmente algunos cuadros (inicio, mitad, clímax, cierre).
 13. Usar `--preview T` para probar cambios de diseño antes de generar el video completo.
@@ -61,8 +61,8 @@ Detalle y fuentes de las reglas de Creator Rewards: `docs/TIKTOK.md` (incluye ch
 
 ## Código
 
-18. Nombres de archivo en kebab-case: `midi/nombre-cancion.mid` → `out/videos/nombre-cancion.mp4`.
-    Las pruebas van en `out/pruebas/` y terminan en `-prueba` cuando conviven con la versión final.
+18. Nombres de archivo en kebab-case: `midi/nombre-cancion.mid` → `out/videos/piano/nombre-cancion.mp4`.
+    Cada video va en la subcarpeta de su tipo (`piano/`, `beats/`, `datos/`, `bolitas/`, `podcast/`, `caricatura/`, `cineclub/`, `tienda/`, `otros/`). Las pruebas van en `out/pruebas/<tipo>/` y terminan en `-prueba` cuando conviven con la versión final.
 19. Mantener `neon_keys.py` como un solo script autocontenido; la web (`app.py`) solo lo invoca como
     subproceso, no duplica su lógica.
 20. Al tomar una decisión técnica importante, registrarla en `docs/ADR.md`.

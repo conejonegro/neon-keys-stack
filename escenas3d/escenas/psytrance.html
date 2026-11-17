@@ -1,0 +1,933 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body { margin: 0; background: #06020f; overflow: hidden; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// "¿Cómo se hace un buen psytrance?": el secuenciador de la serie de beats (ADR-022) con el galope del psytrance
+// (ADR-027). Parte de la escena del reguetón (ADR-023): abre con un psytrance embarrado (bloques apagados) que se
+// apaga cerrando el filtro; luego los 16 pasos × 6 carriles se llenan capa por capa. Paleta ultravioleta + verde
+// tóxico (sale del JSON), cámara que se mece despacio (hipnótica) y en los respiros gira en espiral. En el drop las
+// baldosas vuelan y arman un túnel de anillos que giran en espiral; la cámara se mete y vuela por dentro, cada
+// kick manda una onda de luz por el túnel. Glitch y cierre NK.
+// Los golpes, textos y tiempos vienen de psytrance.py (los mismos que el audio). grabar.js llama a
+// window.cargar(datos) y luego a window.dibujar(t); todo sale de t, así una vista previa = el video.
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+const W = 1080, H = 1920;
+const PASOS = 16, FILAS = 6;
+const ALTO_BALDOSA = 0.18, TOPE = ALTO_BALDOSA / 2;
+// Altura de cada capa; el color sale de la paleta del JSON en cargar()
+const CAPAS = {
+  'KICK': { alto: 1.6 }, 'BAJO': { alto: 1.0 }, 'CLAP': { alto: 1.2 }, 'OPEN HAT': { alto: 0.9 },
+  'HATS': { alto: 0.5 }, 'ACID': { alto: 1.4 }, 'ROLL': { alto: 0.9 },
+  // El psytrance embarrado: los mismos carriles, apagados y sin vida
+  'KICK MAL': { alto: 1.6 }, 'BAJO MAL': { alto: 1.5 }, 'CLAP MAL': { alto: 1.2 },
+};
+// Carril que se resalta en cada toma
+const FOCO = { kick: ['KICK'], bajo: ['BAJO'], galope: ['KICK', 'BAJO'], clap: ['CLAP'], openhat: ['OPEN HAT'],
+  hats: ['HATS'], acid: ['ACID'], subida: ['CLAP'] };
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.autoClear = false;
+document.body.appendChild(renderer.domElement);
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(0x06020f);
+escena.fog = new THREE.Fog(0x06020f, 30, 110);
+const camara = new THREE.PerspectiveCamera(52, W / H, 0.1, 300);
+
+const hemi = new THREE.HemisphereLight(0xd8ffd0, 0x0a2a14, 0.75);
+escena.add(hemi);
+const luz = new THREE.DirectionalLight(0xffffff, 1.5);
+luz.position.set(-5, 10, 8);
+escena.add(luz);
+const contraluz = new THREE.DirectionalLight(0xb6ff3b, 1.4);   // el sol pinta los bordes con el color de la paleta
+contraluz.position.set(0, 3, -12);
+escena.add(contraluz);
+
+// ------------------------------------------------------------------ fondo: degradado, sol, montañas, piso
+const matEstrellas = new THREE.PointsMaterial({ color: 0xc8ff9a, size: 1.4, sizeAttenuation: false, fog: false });
+{
+  const n = 900, pos = new Float32Array(n * 3);
+  let s = 951;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < n; i++) pos.set([(rnd() - 0.5) * 300, 15 + rnd() * 120, -120 - rnd() * 40], i * 3);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  escena.add(new THREE.Points(geo, matEstrellas));
+}
+const cielo = new THREE.Mesh(new THREE.SphereGeometry(200, 32, 16), new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: { arriba: { value: new THREE.Color() }, abajo: { value: new THREE.Color() } },
+  vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform vec3 arriba; uniform vec3 abajo; varying vec3 vP;
+    void main(){
+      float y = normalize(vP).y;
+      gl_FragColor = vec4(mix(abajo, arriba, smoothstep(-0.05, 0.45, y)), 1.0);
+    }`,
+}));
+escena.add(cielo);
+
+// Sol retro de franjas que late con el kick (los dos colores salen de la paleta)
+const sol = new THREE.Mesh(new THREE.CircleGeometry(24, 96), new THREE.ShaderMaterial({
+  fog: false, uniforms: { latido: { value: 0 }, c0: { value: new THREE.Color() }, c1: { value: new THREE.Color() } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform float latido; uniform vec3 c0; uniform vec3 c1; varying vec2 vUv;
+    void main(){
+      vec3 c = mix(c1, c0, smoothstep(0.1, 0.95, vUv.y));
+      float franja = step(0.5, fract(vUv.y * 16.0)) + step(0.58, vUv.y);
+      if (franja < 0.5 && vUv.y < 0.58) discard;
+      gl_FragColor = vec4(c * (0.42 + 0.14 * latido), 1.0);
+    }`,
+}));
+const FONDO = new THREE.Vector3(0.61, 0, -0.79);
+const Y_PISO = -40;
+sol.position.copy(FONDO).multiplyScalar(120).setY(-32);
+sol.lookAt(0, -32, 0);
+escena.add(sol);
+
+// Montañas: silueta oscura con el filo del color de la paleta
+const matMontes = new THREE.MeshBasicMaterial({ color: 0x020a05, fog: false });
+const matFilo = new THREE.LineBasicMaterial({ color: 0xb6ff3b, fog: false });
+{
+  let s = 4242;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  const forma = new THREE.Shape();
+  const filo = [];
+  forma.moveTo(-260, -5);
+  for (let x = -260; x <= 260; x += 9) {
+    const y = 5 + Math.abs(Math.sin(x * 0.021)) * 13 + Math.sin(x * 0.07) * 6 + rnd() * 5 - Math.abs(x) * 0.02;
+    forma.lineTo(x, y);
+    filo.push(new THREE.Vector3(x, y, 0));
+  }
+  forma.lineTo(260, -5);
+  const montes = new THREE.Mesh(new THREE.ShapeGeometry(forma), matMontes);
+  const linea = new THREE.Line(new THREE.BufferGeometry().setFromPoints(filo), matFilo);
+  linea.position.z = 0.1;
+  const g = new THREE.Group();
+  g.add(montes, linea);
+  g.position.copy(FONDO).multiplyScalar(100).setY(Y_PISO);
+  g.lookAt(0, Y_PISO, 0);
+  escena.add(g);
+}
+
+// Piso synthwave (rejilla con shader) que avanza al tempo
+const piso = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.ShaderMaterial({
+  uniforms: { avance: { value: 0 }, latido: { value: 0 }, linea: { value: new THREE.Color() }, fondo: { value: new THREE.Color() } },
+  vertexShader: `varying vec3 vMundo;
+    void main(){ vec4 m = modelMatrix * vec4(position, 1.0); vMundo = m.xyz; gl_Position = projectionMatrix * viewMatrix * m; }`,
+  fragmentShader: `uniform float avance; uniform float latido; uniform vec3 linea; uniform vec3 fondo; varying vec3 vMundo;
+    void main(){
+      vec2 c = vec2(vMundo.x, vMundo.z + avance) / 5.0;
+      vec2 paso = fwidth(c);
+      vec2 d = abs(fract(c - 0.5) - 0.5) / paso;
+      float l = 1.0 - smoothstep(0.6, 1.6, min(d.x, d.y));
+      float lejos = 1.0 - smoothstep(0.05, 0.2, max(paso.x, paso.y));
+      float niebla = 1.0 - smoothstep(40.0, 110.0, length(vMundo.xz - cameraPosition.xz));
+      gl_FragColor = vec4(fondo + linea * (0.55 + 0.3 * latido) * l * lejos * niebla, 1.0);
+    }`,
+}));
+piso.rotation.x = -Math.PI / 2;
+piso.position.y = Y_PISO;
+escena.add(piso);
+
+// ------------------------------------------------------------------ el secuenciador
+const tablero = new THREE.Group();
+escena.add(tablero);
+const xDePaso = p => p - (PASOS - 1) / 2;
+const FILA = 1.3;
+const zDeFila = f => ((FILAS - 1) / 2 - f) * FILA;     // fila 0 (KICK) adelante
+
+const matBaldosa = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.32, metalness: 0.35 });
+matBaldosa.onBeforeCompile = (sh) => {
+  sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
+    '#include <emissivemap_fragment>\n#ifdef USE_INSTANCING_COLOR\n totalEmissiveRadiance += max(vColor.rgb - vec3(0.08), 0.0) * 1.2;\n#endif');
+};
+const baldosas = new THREE.InstancedMesh(new THREE.BoxGeometry(0.92, ALTO_BALDOSA, FILA - 0.08), matBaldosa, PASOS * FILAS);
+baldosas.frustumCulled = false;
+tablero.add(baldosas);
+const marco = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(PASOS + 0.1, 0.02, FILAS * FILA + 0.1)),
+  new THREE.LineBasicMaterial({ color: 0xb6ff3b, transparent: true, opacity: 0.5 }));
+marco.position.y = -TOPE - 0.02;
+tablero.add(marco);
+
+const matBloque = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.1 });
+matBloque.onBeforeCompile = (sh) => {
+  sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
+    '#include <emissivemap_fragment>\n#ifdef USE_INSTANCING_COLOR\n totalEmissiveRadiance += vColor.rgb * 0.42;\n#endif');
+};
+const MAX_BLOQUES = 90;
+const bloques = new THREE.InstancedMesh(new THREE.BoxGeometry(0.78, 1, 0.78), matBloque, MAX_BLOQUES);
+bloques.frustumCulled = false;
+tablero.add(bloques);
+
+// Anillos de luz que se abren en la baldosa al sonar
+const MAX_ANILLOS = 60;
+const geoAnillo = new THREE.RingGeometry(0.4, 0.47, 48);
+geoAnillo.rotateX(-Math.PI / 2);
+const anillos = new THREE.InstancedMesh(geoAnillo, new THREE.MeshBasicMaterial({
+  color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+}), MAX_ANILLOS);
+anillos.frustumCulled = false;
+tablero.add(anillos);
+
+// Chispas (tiro parabólico)
+const MAX_CHISPAS = 900;
+const geoChispas = new THREE.BufferGeometry();
+geoChispas.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_CHISPAS * 3), 3));
+geoChispas.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAX_CHISPAS * 3), 3));
+const puntoRedondo = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,255,255,1)');
+  r.addColorStop(0.35, 'rgba(255,255,255,0.6)');
+  r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})();
+const chispas = new THREE.Points(geoChispas, new THREE.PointsMaterial({
+  size: 0.16, map: puntoRedondo, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+}));
+chispas.frustumCulled = false;
+escena.add(chispas);
+
+// Cabezal de reproducción: franja de luz que recorre los pasos
+const cabezal = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.04, FILAS * FILA + 0.3), new THREE.MeshBasicMaterial({
+  color: 0xffffff, transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending, depthWrite: false,
+}));
+cabezal.position.y = TOPE + 0.03;
+tablero.add(cabezal);
+
+// ------------------------------------------------------------------ el túnel del drop
+// Cada pieza nace en una baldosa (con el color de su carril) y vuela a su lugar en uno de los anillos del túnel.
+// Los anillos están torcidos uno respecto al otro (espiral) y giran en sentidos contrarios; la cámara se mete y
+// vuela por dentro. Los anillos que quedan atrás de la cámara se vuelven a poner al fondo (túnel sin fin). Con
+// cada kick una onda de luz recorre el túnel hacia adelante; con cada clap todo el túnel destella.
+const ANILLOS = 28, POR_ANILLO = 20, N_PIEZAS = ANILLOS * POR_ANILLO;
+const TUNEL_R = 4.2, TUNEL_Y = 6.5, TUNEL_Z0 = -3, SEPARACION = 2.6, LARGO = ANILLOS * SEPARACION;
+const matPieza = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35, metalness: 0.25 });
+matPieza.onBeforeCompile = (sh) => {
+  sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
+    '#include <emissivemap_fragment>\n#ifdef USE_INSTANCING_COLOR\n totalEmissiveRadiance += vColor.rgb;\n#endif');
+};
+// x = a lo ancho del anillo, y = grosor (hacia el centro), z = a lo largo del túnel
+const piezas = new THREE.InstancedMesh(new THREE.BoxGeometry(1.05, 0.14, 1.55), matPieza, N_PIEZAS);
+piezas.frustumCulled = false;
+escena.add(piezas);                            // en coordenadas del mundo (vuelan desde el tablero)
+const PIEZAS = [];
+{
+  const r = azar(2727);
+  for (let i = 0; i < ANILLOS; i++) {
+    for (let j = 0; j < POR_ANILLO; j++) {
+      const fila = (i * 2 + Math.floor(j / 2)) % FILAS;     // franjas de color que dan vuelta en espiral
+      const p = Math.floor(r() * PASOS);
+      const origen = new THREE.Vector3(xDePaso(p) + (r() - 0.5) * 0.4, TOPE, zDeFila(fila) + (r() - 0.5) * 0.6);
+      PIEZAS.push({ anillo: i, j, fila, baldosa: p * FILAS + fila, origen, orden: r() });
+    }
+  }
+}
+const quatPlano = new THREE.Quaternion();
+const EJE_Z = new THREE.Vector3(0, 0, 1);
+const VEL = 11;                                 // velocidad de vuelo dentro del túnel
+
+// ------------------------------------------------------------------ capa 2D: textos, transporte, etiquetas, cierre
+const hud = new THREE.Scene();
+const camaraHud = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0, 1);
+const lienzo = document.createElement('canvas');
+lienzo.width = W;
+lienzo.height = H;
+const ctx = lienzo.getContext('2d');
+const texHud = new THREE.CanvasTexture(lienzo);
+texHud.colorSpace = THREE.NoColorSpace;
+texHud.minFilter = THREE.LinearFilter;
+texHud.generateMipmaps = false;
+// Modo "screen": el texto se mezcla encima sin bloom propio (MOTION.md)
+const capaTexto = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false,
+  blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+  blendSrc: THREE.OneMinusDstColorFactor, blendDst: THREE.OneFactor,
+  uniforms: { mapa: { value: texHud } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: 'uniform sampler2D mapa; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(mapa, vUv).rgb, 1.0); }',
+}));
+capaTexto.renderOrder = 3;
+// Velo del cierre y sombra de arriba (color del fondo de la paleta, ya en sRGB)
+const colorHud = { value: new THREE.Vector3() };
+const velo = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false, uniforms: { opacidad: { value: 0 }, fondo: colorHud },
+  vertexShader: 'void main(){ gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: 'uniform float opacidad; uniform vec3 fondo; void main(){ gl_FragColor = vec4(fondo, opacidad); }',
+}));
+velo.renderOrder = 2;
+const sombra = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false, uniforms: { fondo: colorHud },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: `uniform vec3 fondo; varying vec2 vUv;
+    void main(){ float y = (1.0 - vUv.y) * 1920.0; gl_FragColor = vec4(fondo, 0.86 * (1.0 - smoothstep(420.0, 700.0, y))); }`,
+}));
+sombra.renderOrder = 1;
+const destello = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { fuerza: { value: 0 }, color: { value: new THREE.Vector3(1, 1, 0.85) } },
+  vertexShader: 'void main(){ gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: 'uniform float fuerza; uniform vec3 color; void main(){ gl_FragColor = vec4(color * fuerza, 1.0); }',
+}));
+destello.renderOrder = 4;
+hud.add(sombra, velo, capaTexto, destello);
+
+function textoNeon(texto, x, y, color, halo, blurs = [26, 10], nucleo = '#ffffff') {
+  ctx.fillStyle = color;
+  ctx.shadowColor = halo;
+  for (const b of blurs) {
+    ctx.shadowBlur = b;
+    ctx.fillText(texto, x, y);
+  }
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = nucleo;
+  ctx.fillText(texto, x, y);
+}
+
+// ------------------------------------------------------------------ posproceso: brillo, barrido y glitch
+const compositor = new EffectComposer(renderer);
+compositor.addPass(new RenderPass(escena, camara));
+const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 0.6, 0.38, 0.32);
+compositor.addPass(bloom);
+// Barrido (whip pan): desenfoque de movimiento en una dirección mientras la cámara salta de toma
+const barrido = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, fuerza: { value: 0 }, dir: { value: new THREE.Vector2(1, 0) } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float fuerza; uniform vec2 dir; varying vec2 vUv;
+    void main(){
+      if (fuerza <= 0.0) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
+      vec4 c = vec4(0.0);
+      for (int i = 0; i < 17; i++) c += texture2D(tDiffuse, vUv + dir * (float(i) / 16.0 - 0.5) * 0.12 * fuerza);
+      gl_FragColor = c / 17.0;
+    }`,
+});
+compositor.addPass(barrido);
+compositor.addPass(new OutputPass());
+const pasoHud = new RenderPass(hud, camaraHud);
+pasoHud.clear = false;
+compositor.addPass(pasoHud);
+const glitch = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, fuerza: { value: 0 }, semilla: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float fuerza; uniform float semilla; varying vec2 vUv;
+    float h(float x){ return fract(sin(x * 127.1 + semilla * 311.7) * 43758.5453); }
+    void main(){
+      if (fuerza <= 0.0) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
+      vec2 uv = vUv;
+      float banda = floor(uv.y * (14.0 + 50.0 * h(1.0)));
+      if (h(banda + 3.0) < 0.12 + 0.55 * fuerza) uv.x += (h(banda + 7.0) - 0.5) * 0.4 * fuerza;
+      uv += (vec2(h(11.0), h(13.0)) - 0.5) * 0.035 * fuerza;
+      float s = 0.004 + 0.035 * fuerza;
+      vec3 c = vec3(texture2D(tDiffuse, uv + vec2(s, 0.0)).r, texture2D(tDiffuse, uv).g, texture2D(tDiffuse, uv - vec2(s, 0.0)).b);
+      vec2 b = floor(uv * vec2(9.0, 16.0));
+      if (h(b.x * 3.1 + b.y * 7.7) > 1.0 - 0.14 * fuerza) c = c.gbr * 1.7;
+      c *= 1.0 - fuerza * 0.25 * (0.5 + 0.5 * sin(vUv.y * 2600.0));
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+});
+compositor.addPass(glitch);
+
+// ------------------------------------------------------------------ utilidades de tiempo
+function azar(semilla) {
+  let a = semilla >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const clamp01 = x => Math.min(1, Math.max(0, x));
+const suave = x => { x = clamp01(x); return x * x * (3 - 2 * x); };
+const salida = x => 1 - Math.pow(1 - clamp01(x), 3);                         // entra rápido y se frena
+const enMedio = x => { x = clamp01(x); return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+const rebote = x => { x = clamp01(x); const c = 1.9; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const grados = g => g * Math.PI / 180;
+function ultimo(lista, t) {                                                   // último tiempo <= t
+  let lo = 0, hi = lista.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (lista[m] <= t) lo = m + 1; else hi = m; }
+  return lo;                                                                  // cuántos tiempos hay <= t
+}
+const ultimoT = (lista, t) => { const i = ultimo(lista, t); return i > 0 ? lista[i - 1] : -99; };
+
+// Textos que flotan sobre la cuadrícula: [toma, texto, x, y, z, tamaño]
+const FLOTANTES = [
+  ['clap', '2 · 4', xDePaso(8), TOPE + 2.2, zDeFila(2), 64],
+  ['openhat', 'CONTRATIEMPO', xDePaso(8), TOPE + 2.0, zDeFila(3), 54],
+  ['hats', '1/16', xDePaso(8), TOPE + 1.4, zDeFila(4), 64],
+  ['dato', 'GOA · INDIA', xDePaso(8), TOPE + 3.2, zDeFila(3), 60],
+  ['recap', '145 BPM', xDePaso(8), TOPE + 3.0, zDeFila(2), 64],
+];
+// Números que salen sobre los golpes: [toma, capa, textos]
+const NUMEROS = [['kick', 'KICK', ['1', '2', '3', '4']]];
+// El galope en la toma cenital: un corchete por tiempo (kick + tres notas de bajo)
+const GRUPOS = [[0, 4], [4, 4], [8, 4], [12, 4]];
+
+// ------------------------------------------------------------------ datos
+let D = null, P = null, lista = [], tKicks = [], tCajas = [], tDrop = 0, CAJAS_DROP = [];   // tCajas = claps
+const COL = {};                                     // colores de la paleta como THREE.Color (lineal)
+const color = new THREE.Color(), BLANCO = new THREE.Color(0xffffff), m4 = new THREE.Matrix4(), esc = new THREE.Vector3();
+const baseBaldosa = new THREE.Color();
+
+// Tomas de cámara (coordenadas del tablero: x = pasos −7.5…7.5, z = carriles 3.25 adelante…−3.25 atrás).
+// p = posición, l = mirada, r = inclinación en grados (ángulo holandés) al empezar y al terminar.
+// corte: 'h' o 'v' = entra con barrido en esa dirección; si no, se funde suave con la anterior.
+const TOMAS = {
+  malo: { p0: [8.5, 5.5, 11], p1: [6.5, 4.8, 10], l0: [-1.0, 0.8, 0], l1: [-0.8, 0.8, 0], r0: -4, r1: -9 },
+  mal: { p0: [6.5, 4.8, 10], p1: [4.8, 3.8, 8.2], l0: [-0.8, 0.8, 0], l1: [-0.8, 0.6, 0], r0: -9, r1: -14 },
+  kick: { p0: [-8, 2.6, 10], p1: [2, 2.6, 10], l0: [-4.5, 1.2, 3.25], l1: [5.5, 1.2, 3.25], r0: 0, r1: 0, corte: 'h' },
+  bajo: { p0: [11, 3.4, 9.5], p1: [6.5, 3.2, 10], l0: [1.5, 1.0, 1.95], l1: [-2, 1.0, 1.95], r0: -6, r1: -4, corte: 'v' },
+  galope: { p0: [0, 34, 6], p1: [0, 32, 5.5], l0: [0, 0, 1.6], l1: [0, 0, 1.6], r0: 0, r1: 0, corte: 'v' },
+  respiro1: { orbita: true, a0: -0.9, giro: 1.6, r: 16, y0: 6, y1: 9 },
+  clap: { p0: [12.5, 7.5, 11], p1: [10.5, 6.8, 12], l0: [0, 1.4, 0.5], l1: [0.5, 1.4, 0.5], r0: -10, r1: -8, corte: 'h' },
+  openhat: { p0: [-12, 4.5, 3], p1: [-9, 4.2, 1], l0: [2, 1, -0.65], l1: [3, 1, -0.65], r0: 8, r1: 6, corte: 'h' },
+  hats: { p0: [12, 5.0, -8.5], p1: [9.5, 5.2, -9.5], l0: [-2.5, 1.0, -2.5], l1: [-3.0, 1.0, -2.5], r0: -6, r1: -6 },
+  respiro2: { orbita: true, a0: 0.9, giro: -1.4, r: 14, y0: 16, y1: 7 },             // espiral que baja
+  acid: { p0: [-12, 2.4, -1.2], p1: [-3, 2.4, -1.2], l0: [-5, 1.2, -3.25], l1: [6, 1.2, -3.25], r0: 4, r1: 2, corte: 'v' },
+  respiro3: { orbita: true, a0: -0.4, giro: 2.4, r: 18, y0: 9, y1: 12 },
+  dato: { p0: [-14, 10, 16], p1: [-9, 11, 18], l0: [1, -1.5, -0.5], l1: [1, -1.5, -0.5], r0: 3, r1: -3 },
+  recap: { p0: [0, 20, 15], p1: [0, 16, 13], l0: [0, 0, 0], l1: [0, 0.5, 0], r0: 0, r1: 0, corte: 'v' },
+  antes: { p0: [0, 6.5, 17.5], p1: [0, 6.0, 16.5], l0: [0, 1.2, 0], l1: [0, 1.2, 0], r0: 0, r1: 0, corte: 'v' },
+  ahora: { p0: [0, 6.0, 16.5], p1: [0, 8, 19], l0: [0, 1.2, 0], l1: [0, 1.6, 0], r0: 0, r1: 4 },
+  subida: { p0: [0, 8, 19], p1: [0, 7.5, 15], l0: [0, 1.6, 0], l1: [0, 5.5, -6], r0: 4, r1: -4 },
+};
+const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3(), vD = new THREE.Vector3();
+// Devuelve la inclinación (radianes); pos y mira salen por referencia
+function tomaEn(nombre, u, pos, mira) {
+  const k = TOMAS[nombre], e = suave(u);
+  if (k.orbita) {
+    // Vuelta alrededor de todo el secuenciador (en los respiros: espirales que suben o bajan)
+    const a = k.a0 + k.giro * enMedio(u);
+    pos.set(Math.sin(a) * k.r, k.y0 + (k.y1 - k.y0) * e, Math.cos(a) * k.r);
+    mira.set(0, -0.5, 0);
+    return 0;
+  }
+  pos.fromArray(k.p0).lerp(vD.fromArray(k.p1), e);
+  mira.fromArray(k.l0).lerp(vD.fromArray(k.l1), e);
+  return grados(k.r0 + (k.r1 - k.r0) * e);
+}
+
+function rango(nombre) {
+  const s = D.secciones.find(x => x.toma === nombre);
+  return s ? [s.t0, s.t1] : [1e9, 1e9];
+}
+function seccionEn(t) {
+  let i = 0;
+  while (i + 1 < D.secciones.length && D.secciones[i + 1].t0 <= t) i++;
+  return i;
+}
+const hex = c => '#' + c.getHexString();
+const aclarar = (h, k) => hex(new THREE.Color(h).lerp(BLANCO, k));
+
+window.cargar = (d) => {
+  D = d;
+  P = D.paletas[D.paleta];
+  tDrop = D.secciones.find(s => s.toma === 'drop').t0;
+  // Paleta → materiales
+  for (const [capa, h] of Object.entries(P.capas)) COL[capa] = new THREE.Color(h);
+  COL.ROLL = COL.CLAP;
+  for (const capa of ['KICK', 'BAJO', 'CLAP']) {
+    COL[capa + ' MAL'] = COL[capa].clone().lerp(new THREE.Color(0x8a8a8a), 0.55).multiplyScalar(0.8);
+  }
+  const fondo0 = new THREE.Color(P.fondo[0]), fondo1 = new THREE.Color(P.fondo[1]);
+  escena.background = fondo0.clone();
+  escena.fog.color = fondo1.clone();
+  cielo.material.uniforms.arriba.value.copy(fondo0);
+  cielo.material.uniforms.abajo.value.copy(fondo1);
+  sol.material.uniforms.c0.value.set(P.sol[0]);
+  sol.material.uniforms.c1.value.set(P.sol[1]);
+  piso.material.uniforms.linea.value.set(P.piso);
+  piso.material.uniforms.fondo.value.copy(fondo1);
+  matFilo.color.set(P.filo);
+  matMontes.color.copy(fondo0).multiplyScalar(0.7);
+  matEstrellas.color.set(P.estrellas);
+  contraluz.color.set(P.piso);
+  hemi.color.set(P.estrellas);
+  hemi.groundColor.copy(fondo1);
+  marco.material.color.set(P.texto);
+  cabezal.material.color.set(P.texto);
+  baseBaldosa.copy(fondo1).lerp(new THREE.Color(P.piso), 0.035).multiplyScalar(1.1);
+  const s = new THREE.Color(P.fondo[0]);
+  colorHud.value.set(...[s.r, s.g, s.b].map(c => c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055));
+  const cl = new THREE.Color(P.clave);
+  destello.material.uniforms.color.value.set(cl.r * 0.5 + 0.5, cl.g * 0.5 + 0.5, cl.b * 0.5 + 0.5);
+
+  // Un bloque por (capa, paso): aparece en cascada cuando su capa entra, justo antes de su primer golpe
+  const porClave = new Map();
+  for (const [t, carril, paso, fuerza, capa] of D.golpes) {
+    const clave = `${capa}-${paso}`;
+    if (!porClave.has(clave)) {
+      const sec = D.secciones.find(s => s.t0 <= t && t < s.t1);
+      // El beat cuadrado ya está completo en el cuadro 0 (gancho); el resto entra en cascada
+      const aparece = capa === 'ROLL' ? t - 0.06 : sec.toma === 'malo' ? -1 : Math.max(sec.t0 - 0.12, sec.t0 + paso * D.paso * 0.5 - 0.1);
+      porClave.set(clave, { capa, carril, paso, fuerza, tiempos: [], aparece });
+    }
+    porClave.get(clave).tiempos.push(t);
+    if (capa === 'KICK' || capa === 'KICK MAL') tKicks.push(t);
+    if (capa === 'CLAP' || capa === 'ROLL') tCajas.push(t);
+  }
+  lista = [...porClave.values()];
+  for (const l of [tKicks, tCajas]) l.sort((a, b) => a - b);
+  CAJAS_DROP = tCajas.filter(x => x >= tDrop);
+};
+
+// Momento en que la pieza (o su baldosa) despega hacia el túnel: en cascada, los anillos cercanos primero
+const despegue = f => tDrop - 0.6 + 0.6 * (0.6 * f.anillo / (ANILLOS - 1) + 0.4 * f.orden);
+const VUELO = 0.6;
+const despegueBaldosa = new Float32Array(PASOS * FILAS).fill(1e9);
+
+// ------------------------------------------------------------------ dibujar un cuadro
+const pos = new THREE.Vector3(), mira = new THREE.Vector3(), proy = new THREE.Vector3();
+const qTmp = new THREE.Quaternion(), qDestino = new THREE.Quaternion(), pTmp = new THREE.Vector3();
+function aPantalla(x, y, z) {
+  proy.set(x, y, z).applyMatrix4(tablero.matrixWorld).project(camara);
+  return [(proy.x + 1) / 2 * W, (1 - proy.y) / 2 * H, proy.z < 1];
+}
+
+window.dibujar = (t) => {
+  if (despegueBaldosa[0] > 1e8) for (const f of PIEZAS) despegueBaldosa[f.baldosa] = Math.min(despegueBaldosa[f.baldosa], despegue(f));
+  const fr = Math.min(D.mapa.length - 1, Math.round(t * D.fps));
+  const st = D.mapa[fr];                        // segundo que se ve (el glitch lo traba)
+  const is = seccionEn(st), sec = D.secciones[is];
+  const u = (st - sec.t0) / (sec.t1 - sec.t0);
+  const latido = Math.exp(-Math.max(0, st - ultimoT(tKicks, st)) * 9);
+  const iCaja = ultimo(tCajas, st), golpeCaja = Math.exp(-Math.max(0, st - (iCaja > 0 ? tCajas[iCaja - 1] : -99)) * 6);
+  const enDrop = st >= tDrop;
+  const pasoActual = ((st % D.compas) / D.paso);
+  const compas = Math.floor(st / D.compas);
+  const [a0, a1] = rango('antes'), [h0] = rango('ahora'), [sb0, sb1] = rango('subida');
+  const enAntes = st >= a0 && st < a1;
+
+  // Baldosas: más claras en cada tiempo; la columna que suena se prende. Tiemblan al final de la subida y
+  // despegan hacia el túnel en el drop.
+  const tiembla = st >= sb1 - D.compas && st < tDrop ? Math.pow((st - (sb1 - D.compas)) / D.compas, 2) : 0;
+  for (let p = 0, i = 0; p < PASOS; p++) {
+    const enCabezal = Math.max(0, 1 - Math.abs(pasoActual - 0.5 - p) * 1.4);
+    for (let fi = 0; fi < FILAS; fi++, i++) {
+      const j = p * FILAS + fi;
+      const suelta = st >= despegueBaldosa[j] ? Math.exp(-(st - despegueBaldosa[j]) * 5) : 0;   // destello al soltar piezas
+      const sy = 0.08 * tiembla * Math.sin(st * 61 + j * 1.7);
+      pTmp.set(xDePaso(p), sy, zDeFila(fi));
+      m4.compose(pTmp, qTmp.identity(), esc.setScalar(1));
+      baldosas.setMatrixAt(j, m4);
+      color.copy(baseBaldosa).multiplyScalar(p % 4 === 0 ? 1.5 : 1);
+      color.lerp(COL.CLAP, 0.35 * tiembla * (0.5 + 0.5 * Math.sin(st * 40 + j)));
+      color.add(vToColor(COL.KICK, 0.18 * enCabezal)).add(vToColor(COL[D.carriles[fi]], 0.9 * suelta));
+      baldosas.setColorAt(j, color);
+    }
+  }
+  baldosas.instanceMatrix.needsUpdate = baldosas.instanceColor.needsUpdate = true;
+  cabezal.position.x = xDePaso(Math.floor(pasoActual));
+  cabezal.visible = !enDrop;                    // de frente, en el drop, se quemaba
+
+  // Bloques
+  let nb = 0, na = 0, nc = 0;
+  const pc = geoChispas.attributes.position.array, cc = geoChispas.attributes.color.array;
+  for (const b of lista) {
+    const ult = ultimoT(b.tiempos, st), edad = st - ult;
+    if (b.capa === 'ROLL' && st > b.tiempos[b.tiempos.length - 1] + 0.3) continue;
+    // El beat cuadrado solo existe al inicio (se cae con el rayón) y en "antes" (sale con "ahora")
+    let derrumbe = 1;
+    if (b.capa.endsWith(' MAL')) {
+      const [m0, m1] = D.malo, [l0] = rango('mal');
+      if (st >= m0 && st < m1) derrumbe = 1 - salida((st - l0 - b.paso * 0.015) / 0.5);
+      else if (st >= a0 && st < a1 + 0.3) derrumbe = st < a1 ? rebote((st - a0 - b.paso * 0.012) / 0.28) : 1 - salida((st - a1) / 0.25);
+      else continue;
+      if (derrumbe < 0.02) continue;
+    }
+    // Antes / ahora: lo nuevo se hunde y luego vuelve a saltar
+    let mudo = derrumbe;
+    if (!b.capa.endsWith(' MAL')) {
+      if (enAntes) mudo = 1 - salida((st - a0) / 0.3);
+      else if (st >= h0 && st < h0 + 1.2) mudo = rebote((st - h0 - b.paso * 0.012 - b.carril * 0.04) / 0.3);
+      if (mudo < 0.02) continue;
+    }
+    let golpe = edad >= 0 && edad < 2 ? Math.exp(-edad * 11) : 0;
+    let crece = rebote((st - b.aparece) / 0.28);
+    if (st < b.aparece && !(b.capa.endsWith(' MAL') && st >= a0)) continue;
+    if (b.capa.endsWith(' MAL') && st >= a0) crece = 1;
+    const alto = Math.max(0.02, CAPAS[b.capa].alto * b.fuerza * crece * mudo * (1 + 0.18 * golpe));
+    const xb = xDePaso(b.paso);
+    pTmp.set(xb, TOPE + alto / 2, zDeFila(b.carril));
+    m4.compose(pTmp, qTmp.identity(), esc.set(1 + 0.08 * golpe, alto, 1 + 0.08 * golpe));
+    bloques.setMatrixAt(nb, m4);
+    color.copy(COL[b.capa]).lerp(BLANCO, 0.35 * golpe).multiplyScalar(0.7 + 0.55 * golpe);
+    bloques.setColorAt(nb++, color);
+
+    // Anillo y chispas de cada golpe reciente
+    if (edad >= 0 && edad < 0.55 && mudo > 0.5 && na < MAX_ANILLOS) {
+      const s = 1 + edad * 2.6;
+      pTmp.set(xb, TOPE + 0.015, zDeFila(b.carril));
+      m4.compose(pTmp, qTmp.identity(), esc.set(s, 1, s));
+      anillos.setMatrixAt(na, m4);
+      color.copy(COL[b.capa]).lerp(BLANCO, 0.4).multiplyScalar(Math.pow(1 - edad / 0.55, 2) * 1.3);
+      anillos.setColorAt(na++, color);
+    }
+    if (edad >= 0 && edad < 0.75 && mudo > 0.5) {
+      const n = b.capa === 'HATS' ? 2 : b.capa === 'BAJO' || b.capa === 'ACID' ? 4 : 10;
+      const r = azar(Math.round(ult * 1000) * 31 + b.paso * 7 + b.carril);
+      for (let k = 0; k < n && nc < MAX_CHISPAS; k++, nc++) {
+        const v = 2.2 + r() * 2.8, a = r() * Math.PI * 2, lat = 1.2 + r() * 1.6, vida = 0.45 + r() * 0.3;
+        if (edad > vida) { nc--; continue; }
+        const vx = Math.cos(a) * lat, vy = v + 0.5, vz = Math.sin(a) * lat;
+        const fre = 1 - edad * 0.9;                                    // freno de aire
+        pc[nc * 3] = xb + vx * edad * fre;
+        pc[nc * 3 + 1] = TOPE + alto + vy * edad * fre - 4.5 * edad * edad;
+        pc[nc * 3 + 2] = zDeFila(b.carril) + vz * edad * fre;
+        const vivo = Math.pow(1 - edad / vida, 1.5);
+        color.copy(COL[b.capa]).lerp(BLANCO, Math.max(0, 1 - edad * 5)).multiplyScalar(vivo * 1.4);
+        cc[nc * 3] = color.r; cc[nc * 3 + 1] = color.g; cc[nc * 3 + 2] = color.b;
+      }
+    }
+  }
+  bloques.count = nb;
+  anillos.count = na;
+  bloques.instanceMatrix.needsUpdate = anillos.instanceMatrix.needsUpdate = true;
+  if (bloques.instanceColor) bloques.instanceColor.needsUpdate = true;
+  if (anillos.instanceColor) anillos.instanceColor.needsUpdate = true;
+
+  geoChispas.setDrawRange(0, nc);
+  geoChispas.attributes.position.needsUpdate = geoChispas.attributes.color.needsUpdate = true;
+
+  // Cámara
+  let roll = 0, blur = 0;
+  if (!enDrop) {
+    roll = tomaEn(sec.toma, u, pos, mira);
+    const dt = st - sec.t0, k = TOMAS[sec.toma];
+    if (is > 0) {
+      if (k.corte && dt < 0.32) {
+        // Barrido: salta rápido de la toma anterior a esta con desenfoque de movimiento
+        const rPrev = tomaEn(D.secciones[is - 1].toma, 1, vA, vB);
+        const e = enMedio(dt / 0.32);
+        pos.copy(vA.lerp(pos, e));
+        mira.copy(vB.lerp(mira, e));
+        roll = rPrev + (roll - rPrev) * e;
+        blur = Math.sin(Math.PI * dt / 0.32);
+        barrido.uniforms.dir.value.set(k.corte === 'h' ? 1 : 0, k.corte === 'v' ? 0.5625 : 0);
+      } else if (!k.corte && dt < 0.55) {
+        const rPrev = tomaEn(D.secciones[is - 1].toma, 1, vA, vB);
+        const e = suave(dt / 0.55);
+        pos.copy(vA.lerp(pos, e));
+        mira.copy(vB.lerp(mira, e));
+        roll = rPrev + (roll - rPrev) * e;
+      }
+    }
+    if (sec.toma === 'subida') {
+      const tr = 0.12 * u * u;
+      pos.x += Math.sin(st * 53) * tr;
+      pos.y += Math.sin(st * 71) * tr;
+    }
+  } else {
+    // Clímax: la cámara se pone en la boca del túnel y se mete; adentro vuela hacia adelante (cada vez más rápido)
+    // y gira despacio sobre su eje: hipnótico
+    const td = st - tDrop;
+    const rPrev = tomaEn('subida', 1, vA, vB);
+    const x = Math.max(0, td - 0.7);
+    const z = 10 - VEL * (x < 1.5 ? x * x / 3 : x - 0.75);
+    vC.set(0.5 * Math.sin(td * 0.9), TUNEL_Y + 0.35 * Math.sin(td * 0.7), z);
+    const e = suave(td / 1.0);
+    pos.copy(vA.lerp(vC, e));
+    mira.copy(vB.lerp(vD.set(1.2 * Math.sin(td * 0.55), TUNEL_Y, z - 12), e));
+    roll = rPrev * (1 - e) + (0.38 * td + 0.04 * latido) * e;
+  }
+  // Psy: desde que entra el acid la cámara se mece despacio (un vaivén cada dos compases)
+  if (st >= D.entrada.ACID && !enAntes && !enDrop) roll += grados(2.2) * Math.sin(2 * Math.PI * st / (2 * D.compas));
+  camara.position.copy(pos);
+  camara.up.set(0, 1, 0);
+  camara.lookAt(mira);
+  camara.rotateZ(roll);
+  camara.updateMatrixWorld();
+  tablero.updateMatrixWorld();
+  barrido.uniforms.fuerza.value = blur;
+
+  // Túnel: las piezas vuelan desde las baldosas a su anillo; adentro, onda de luz con cada kick y destello con el clap
+  let np = 0;
+  if (st >= tDrop - 0.7) {
+    const td = Math.max(0, st - tDrop), camZ = camara.position.z;
+    let giroClap = 0;
+    for (const tc of CAJAS_DROP) { if (tc > st) break; giroClap += 0.3 * salida((st - tc) / 0.2); }
+    // Brillo de cada anillo: ondas que salen de la cámara con los últimos kicks y viajan al fondo
+    const zAnillo = new Float32Array(ANILLOS), luzAnillo = new Float32Array(ANILLOS);
+    const ik = ultimo(tKicks, st);
+    for (let i = 0; i < ANILLOS; i++) {
+      const z0 = TUNEL_Z0 - i * SEPARACION;
+      zAnillo[i] = z0 - Math.max(0, Math.ceil((z0 - (camZ - 1.5)) / LARGO)) * LARGO;   // túnel sin fin
+      for (let j = ik - 1; j >= Math.max(0, ik - 3); j--) {
+        const edad = st - tKicks[j];
+        if (tKicks[j] < tDrop || edad > 1.4) continue;
+        const frente = camZ - 2 - edad * 48;
+        luzAnillo[i] += Math.exp(-Math.pow((zAnillo[i] - frente) / 3.2, 2)) * (1 - edad / 1.4);
+      }
+    }
+    const R = TUNEL_R * (1 + 0.05 * latido);
+    for (const f of PIEZAS) {
+      const k = (st - despegue(f)) / VUELO;
+      if (k <= 0) continue;
+      const e = enMedio(k), sentido = f.anillo % 2 ? 1 : -1;
+      const th = f.j * 2 * Math.PI / POR_ANILLO + f.anillo * 0.26 + sentido * (0.35 * td + giroClap);
+      vA.set(Math.cos(th) * R, TUNEL_Y + Math.sin(th) * R, zAnillo[f.anillo]);
+      pTmp.copy(f.origen).lerp(vA, e);
+      pTmp.y += Math.sin(Math.PI * clamp01(k)) * 3;                                          // vuela en arco
+      qTmp.slerpQuaternions(quatPlano, qDestino.setFromAxisAngle(EJE_Z, th - Math.PI / 2), e);
+      const llega = k >= 1 ? Math.exp(-(k - 1) * VUELO * 9) : 0;                             // destello al encajar
+      m4.compose(pTmp, qTmp, esc.setScalar(1 + 0.25 * llega));
+      piezas.setMatrixAt(np, m4);
+      const chispa = azar(f.anillo * 977 + f.j * 31 + Math.floor(st * 10))() > 0.97 ? 1 : 0;
+      color.copy(COL[D.carriles[f.fila]])
+        .multiplyScalar(0.14 + 1.1 * luzAnillo[f.anillo] + 0.35 * golpeCaja * (enDrop ? 1 : 0) + 0.9 * llega);
+      color.lerp(BLANCO, 0.6 * chispa);
+      piezas.setColorAt(np++, color);
+    }
+  }
+  piezas.count = np;
+  piezas.instanceMatrix.needsUpdate = true;
+  if (piezas.instanceColor) piezas.instanceColor.needsUpdate = true;
+
+  sol.material.uniforms.latido.value = latido;
+  sol.scale.setScalar(1 + 0.015 * latido);
+  piso.material.uniforms.avance.value = st * (D.bpm / 60) * 2.5;
+  piso.material.uniforms.latido.value = latido;
+  bloom.strength = 0.5 + 0.1 * latido + (enDrop ? 0.12 : 0) + (sec.toma === 'subida' ? 0.3 * u : 0);
+  destello.material.uniforms.fuerza.value = t >= tDrop ? 0.8 * Math.exp(-(t - tDrop) * 7) : 0;
+
+  // ---------------------------------------------------------------- capa 2D
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  const cierre = t >= D.cierre ? clamp01((t - D.cierre) / 0.25) : 0;
+  velo.material.uniforms.opacidad.value = cierre * 0.88;
+  const A = P.texto, B = P.clave, Bn = aclarar(P.clave, 0.45);
+
+  if (cierre < 1) {
+    ctx.globalAlpha = 1 - cierre;
+    // Barra de transporte
+    const y0 = 196, alto = 64;
+    ctx.strokeStyle = A + '8c';
+    ctx.lineWidth = 2;
+    ctx.fillStyle = A + '0d';
+    ctx.beginPath();
+    ctx.roundRect(48, y0, W - 96, alto, 32);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = B;
+    ctx.shadowColor = B;
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.moveTo(84, y0 + 18); ctx.lineTo(108, y0 + 32); ctx.lineTo(84, y0 + 46);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 34px Futura';
+    textoNeon(String(D.bpm), 128, y0 + 33, A, A, [10]);
+    ctx.font = '600 18px "Avenir Next"';
+    ctx.fillStyle = aclarar(A, 0.5);
+    ctx.fillText('BPM', 180, y0 + 37);
+    ctx.font = 'bold 30px Menlo';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('4/4', 240, y0 + 33);
+    const tiempo = Math.floor((st % D.compas) / D.beat) + 1;
+    const semi = Math.floor((st % D.beat) / D.paso) + 1;
+    ctx.fillText(`${String(compas + 1).padStart(3, '0')}.${tiempo}.${semi}`, 330, y0 + 33);
+    // Los 16 pasos en chiquito: los del kick marcados
+    for (let i = 0; i < 16; i++) {
+      const on = i === Math.floor(pasoActual), dem = D.marcas.includes(i);
+      ctx.fillStyle = on ? '#ffffff' : dem ? B : A + '59';
+      ctx.shadowColor = B;
+      ctx.shadowBlur = on ? 16 : 0;
+      ctx.beginPath();
+      ctx.arc(552 + i * 16, y0 + 32, on ? 7 : dem ? 5.5 : 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 22px Futura';
+    ctx.letterSpacing = '4px';
+    textoNeon('NEON KEYS', W - 82, y0 + 33, B, B, [10]);
+    ctx.letterSpacing = '0px';
+
+    // Subtítulo palabra por palabra (la palabra clave en el color de acento)
+    // Máximo dos renglones: si no cabe, la letra se achica (un tercer renglón caería sobre el tablero)
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    let lineas, espacio, interlineado;
+    for (const tam of [72, 64, 58]) {
+      ctx.font = `bold ${tam}px Futura`;
+      espacio = ctx.measureText(' ').width;
+      interlineado = tam * 1.25;
+      lineas = [[]];
+      let ancho = 0;
+      for (const p of sec.palabras) {
+        const w = ctx.measureText(p.txt).width;
+        if (ancho + w > 960 && lineas[lineas.length - 1].length) { lineas.push([]); ancho = 0; }
+        lineas[lineas.length - 1].push({ ...p, w });
+        ancho += w + espacio;
+      }
+      if (lineas.length <= 2) break;
+    }
+    const salidaTexto = 1 - clamp01((st - (sec.t1 - 0.12)) / 0.12);
+    lineas.forEach((ls, li) => {
+      const total = ls.reduce((a, p) => a + p.w, 0) + espacio * (ls.length - 1);
+      let x = (W - total) / 2;
+      const y = 370 + li * interlineado;
+      for (const p of ls) {
+        const k = salida((st - p.t) / 0.18);
+        if (k > 0) {
+          ctx.save();
+          ctx.globalAlpha = (1 - cierre) * k * salidaTexto;
+          ctx.translate(x + p.w / 2, y + 22 * (1 - k));
+          ctx.scale(0.9 + 0.1 * k, 0.9 + 0.1 * k);
+          if (p.clave) textoNeon(p.txt, -p.w / 2, 0, B, B, [30, 12], Bn);
+          else textoNeon(p.txt, -p.w / 2, 0, A, A, [22, 8]);
+          ctx.restore();
+        }
+        x += p.w + espacio;
+      }
+    });
+
+    // Etiquetas de los carriles (no en el drop)
+    if (st < tDrop - 0.6) {
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const foco = sec.toma === 'recap'
+        ? [D.carriles[Math.min(FILAS - 1, Math.floor(u * FILAS * 1.15))]]
+        : FOCO[sec.toma] || [];
+      const malo = (st >= D.malo[0] && st < D.malo[1]) || enAntes;
+      D.carriles.forEach((capa, fi) => {
+        const resalta = foco.includes(capa);
+        if (!resalta && !(st >= D.entrada[capa] - 0.25) && !(malo && D.capasAntes.includes(capa + ' MAL'))) return;
+        let sx = -1, sy = 0;
+        for (let x = xDePaso(0) - 1.6; x < xDePaso(PASOS - 1); x += 0.25) {
+          const [px, py, delante] = aPantalla(x, TOPE, zDeFila(fi));
+          if (delante && px >= 56 && px < W - 200 && py > 640 && py < 1580) { sx = px; sy = py; break; }
+        }
+        if (sx < 0) return;
+        ctx.font = `bold ${resalta ? 32 : 26}px Futura`;
+        const ancho = ctx.measureText(capa).width;
+        ctx.fillStyle = hex(new THREE.Color(P.fondo[0])) + 'b8';
+        ctx.beginPath();
+        ctx.roundRect(sx - 14, sy - 24, ancho + 28, 48, 24);
+        ctx.fill();
+        if (resalta) textoNeon(capa, sx, sy + 1, B, B, [16], Bn);
+        else { ctx.fillStyle = 'rgba(240,255,235,0.9)'; ctx.fillText(capa, sx, sy + 1); }
+      });
+    }
+
+    // Corchetes del galope en la toma cenital: cada tiempo (kick + ta-ta-ta) aparece cuando suena su kick
+    {
+      const [g0, g1] = rango('galope');
+      if (st >= g0 && st < g1) {
+        const fuera = 1 - clamp01((st - g1 + 0.2) / 0.2);
+        for (const [p0, n] of GRUPOS) {
+          const tg = g0 + p0 * D.paso;
+          const k = salida((st - tg) / 0.2) * fuera;
+          if (k <= 0) continue;
+          const [xa, ya] = aPantalla(xDePaso(p0) - 0.42, TOPE, zDeFila(1) - 0.95);
+          const [xb2, yb] = aPantalla(xDePaso(p0 + n - 1) + 0.42, TOPE, zDeFila(1) - 0.95);
+          const yc = (ya + yb) / 2, xm = (xa + xb2) / 2, w2 = (xb2 - xa) * k;
+          ctx.globalAlpha = k * (1 - cierre);
+          ctx.strokeStyle = B;
+          ctx.shadowColor = B;
+          ctx.shadowBlur = 16;
+          ctx.lineWidth = 6;
+          ctx.beginPath();
+          ctx.moveTo(xm - w2 / 2, yc + 22); ctx.lineTo(xm - w2 / 2, yc); ctx.lineTo(xm + w2 / 2, yc); ctx.lineTo(xm + w2 / 2, yc + 22);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'alphabetic';
+          ctx.font = `bold ${Math.round(27 * (0.7 + 0.3 * k))}px Futura`;
+          textoNeon('BOM·ta·ta·ta', xm, yc - 16, B, B, [16, 6], Bn);
+        }
+      }
+    }
+
+    // Textos flotantes y números
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const [toma, texto, x, y, z, tam] of FLOTANTES) {
+      const [f0, f1] = rango(toma);
+      const k = salida((st - f0 - 0.85) / 0.25) * (1 - clamp01((st - f1 + 0.15) / 0.2));
+      if (k <= 0) continue;
+      const [sx, sy] = aPantalla(x, y, z);
+      ctx.globalAlpha = k * (1 - cierre);
+      ctx.font = `bold ${Math.round(tam * (0.8 + 0.2 * k))}px Futura`;
+      textoNeon(texto, sx, sy, A, A, [24, 10]);
+    }
+    for (const [toma, capa, numeros] of NUMEROS) {
+      const [n0, n1] = rango(toma);
+      lista.filter(b => b.capa === capa).sort((a, b) => a.paso - b.paso).forEach((b, i) => {
+        const tg = b.tiempos.find(x => x >= n0) ?? 99;
+        const kk = salida((st - tg) / 0.2) * (1 - clamp01((st - n1 + 0.15) / 0.2));
+        if (kk <= 0) return;
+        const [sx, sy] = aPantalla(xDePaso(b.paso), TOPE + CAPAS[capa].alto + 0.95, zDeFila(b.carril));
+        ctx.globalAlpha = kk * (1 - cierre);
+        ctx.font = `bold ${Math.round(110 * (0.7 + 0.3 * kk))}px Futura`;
+        textoNeon(numeros[i], sx, sy, A, A, [30, 12]);
+      });
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Cierre: monograma NK (la marca, en cian y magenta) + llamada a seguir
+  if (cierre > 0) {
+    const k = salida((t - D.cierre) / 0.45);
+    ctx.globalAlpha = cierre;
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.round(300 * (0.85 + 0.15 * k))}px Futura`;
+    ctx.textAlign = 'right';
+    textoNeon('N', W / 2 + 8, 860, '#00f0ff', '#00f0ff', [60, 26]);
+    ctx.textAlign = 'left';
+    textoNeon('K', W / 2 - 8, 860, '#ff32d2', '#ff32d2', [60, 26]);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 40px Futura';
+    ctx.letterSpacing = '10px';
+    textoNeon('NEON KEYS', W / 2, 1060, '#ff32d2', '#ff32d2', [18]);
+    ctx.letterSpacing = '0px';
+    const k2 = salida((t - D.cierre - 0.3) / 0.3);
+    ctx.globalAlpha = cierre * k2;
+    ctx.font = '600 56px "Avenir Next"';
+    textoNeon(D.cierreTexto, W / 2, 1170 + 16 * (1 - k2), A, A, [18, 8]);
+    ctx.globalAlpha = 1;
+  }
+  texHud.needsUpdate = true;
+
+  // Glitch al final del drop
+  const [gl0, gl1] = D.glitch;
+  glitch.uniforms.fuerza.value = t >= gl0 && t < gl1 ? 0.35 + 0.65 * (t - gl0) / (gl1 - gl0) : 0;
+  // Error en "mal": el beat cuadrado se traba mientras raya el disco
+  const [ml0] = rango('mal');
+  if (t >= ml0 && t < ml0 + 0.55) glitch.uniforms.fuerza.value = 0.7 * (1 - (t - ml0) / 0.55);
+  glitch.uniforms.semilla.value = fr;
+
+  renderer.clear();
+  compositor.render();
+};
+const vColorTmp = new THREE.Color();
+function vToColor(c, k) { return vColorTmp.copy(c).multiplyScalar(k); }
+window.listo = true;
+</script>
+</body>
+</html>

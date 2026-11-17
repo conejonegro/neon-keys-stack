@@ -8,8 +8,9 @@ la boca se mueve cambiando de pose, parpadean, la tele se anima, y hay
 globos de texto, chiptune, balbuceo 8-bit y silbatazo. La voz se pone después en TikTok (o un audio por frase).
 
 Uso:
-    .venv/bin/python podcast_set.py                    # → out/pruebas/podcast-set-tigres-prueba.mp4
-    .venv/bin/python podcast_set.py --episodio penal   # → out/pruebas/podcast-set-penal-prueba.mp4
+    .venv/bin/python podcast_set.py                    # → out/pruebas/podcast/podcast-set-tigres-prueba.mp4
+    .venv/bin/python podcast_set.py --episodio penal   # → out/pruebas/podcast/podcast-set-penal-prueba.mp4
+    .venv/bin/python podcast_set.py --episodio monterrey --salida out/pruebas/podcast/podcast-set-chivas-monterrey.mp4
     .venv/bin/python podcast_set.py --preview 6     # solo un cuadro PNG en t=6 s
 """
 
@@ -81,6 +82,51 @@ EPISODIOS = {
             ("luis", "A la próxima, que lo tire el Piojo.", V + "penal-luis-3.mp3", [("Piojo", "dedo")]),
         ],
         reacciones=[(0, 0.45, HOMBROS), (1, 0.4, "asiente"), (2, 0.6, "asiente")]),
+    "monterrey": dict(
+        titulo="CHIVAS 1-0 MTY", subtitulo="¿Almeida traidor?",
+        dialogo=[
+            ("luis", "¡Ganamos uno a cero en Monterrey, wey, y aun así ando bien encabronado!",
+             V + "chivas-monterrey-luis-1.wav", [("aun", "hombros")]),
+            ("alan", "¿Encabronado por qué, cabrón? ¡El Piojo la metió luego luego!",
+             V + "chivas-monterrey-alan-2.wav", [("¡El", "mano")]),
+            ("luis", "¡Por Almeida, wey! ¡Todo el estadio aplaudiéndole como si fuera santo!",
+             V + "chivas-monterrey-luis-3.wav", [("¡Todo", "mano")]),
+            ("alan", "¡Ah no, pero el Toro Guzmán nos regaló el gol! ¡Ese wey juega para nosotros!",
+             V + "chivas-monterrey-alan-4.wav", [("¡Ese", "dedo")]),
+            ("luis", "Y luego el penal. Yo ya estaba rezando, wey, te lo juro.",
+             V + "chivas-monterrey-luis-5.wav", [("Yo", "hombros")]),
+            ("alan", "¡Pero lo tiró Campos! ¡Segundo penal fallado seguido! ¡Hasta su afición le gritaba \"tíralo normal, pendejo\"!",
+             V + "chivas-monterrey-alan-6.wav", [("¡Segundo", "dedo"), ("¡Hasta", "mano")]),
+            ("luis", "Ese cabrón cobra penales como si estuviera en el Mundial de Fortnite.",
+             V + "chivas-monterrey-luis-7.wav", [("como", "mano")]),
+            ("alan", "¡Y el Rossy le dio una patada al abanderado y todavía se tiró, wey! ¡Qué descaro!",
+             V + "chivas-monterrey-alan-8.wav", [("¡Qué", "hombros")]),
+            ("luis", "Eso no es fútbol, es telenovela de las nueve.",
+             V + "chivas-monterrey-luis-9.wav", [("es", "dedo")]),
+            ("alan", "¡Y se soltó el diluvio! ¡Yo pensé que eran mis lágrimas!",
+             V + "chivas-monterrey-alan-10.wav", [("¡Yo", "mano")]),
+            ("luis", "Luego Orbelín se va expulsado al 89. ¡Ahí sí se me bajó la presión, cabrón!",
+             V + "chivas-monterrey-luis-11.wav", [("¡Ahí", "mano")]),
+            ("alan", "¡Y al 95 el pinche Rossy mete el empate! ¡Yo ya iba a romper la tele!",
+             V + "chivas-monterrey-alan-12.wav", [("¡Yo", "hombros")]),
+            ("luis", "Y entonces… ¡el VAR! ¡Mano clarísima! ¡Anulado, hijos de su madre!",
+             V + "chivas-monterrey-luis-13.wav", [("¡Mano", "dedo"), ("¡Anulado", "mano")]),
+            ("alan", "¡Pero lo peor fue Almeida, wey! ¡Festejó el gol como loco! ¡Contra nosotros!",
+             V + "chivas-monterrey-alan-14.wav", [("¡Festejó", "mano")]),
+            ("luis", "¡Nos juró amor eterno y lo festeja en nuestra cara! ¡Traidor de mierda!",
+             V + "chivas-monterrey-luis-15.wav", [("¡Traidor", "dedo")]),
+            ("alan", "¡Y luego se hizo expulsar para no dar la conferencia! ¡Puro teatro, cabrón!",
+             V + "chivas-monterrey-alan-16.wav", [("¡Puro", "hombros")]),
+            ("luis", "Y la prensa regia diciendo que nos regaló el partido. ¡Lloren, pinches llorones!",
+             V + "chivas-monterrey-luis-17.wav", [("¡Lloren", "mano")]),
+            ("alan", "¡Tercer lugar, empatados con Cruz Azul! ¡Vamos por todo, chingada madre!",
+             V + "chivas-monterrey-alan-18.wav", [("¡Vamos", "dedo")]),
+            ("luis", "Almeida, te perdono… pero nomás si te eliminamos en la liguilla.",
+             V + "chivas-monterrey-luis-19.wav", [("pero", "dedo")]),
+        ],
+        reacciones=[(0, 0.5, HOMBROS), (1, 0.5, "asiente"), (3, 0.6, "asiente"), (5, 0.6, "asiente"),
+                    (6, 0.5, "asiente"), (8, 0.5, "asiente"), (11, 0.6, HOMBROS), (12, 0.5, "asiente"),
+                    (13, 0.6, "asiente"), (14, 0.5, "asiente"), (16, 0.5, "asiente"), (17, 0.5, "asiente")]),
 }
 INICIO, PAUSA, FINAL = 0.9, 0.3, 1.4
 LETRAS_POR_SEG = 21
@@ -113,7 +159,7 @@ def usar(nombre):
     TITULO, SUBTITULO, DIALOGO, REACCIONES = ep["titulo"], ep["subtitulo"], ep["dialogo"], ep["reacciones"]
     LINEAS = armar_lineas()
     DURATION = round(LINEAS[-1]["t1"] + FINAL, 2)
-    OUTPUT = ROOT / "out" / "pruebas" / f"podcast-set-{nombre}-prueba.mp4"
+    OUTPUT = ROOT / "out" / "pruebas" / "podcast" / f"podcast-set-{nombre}-prueba.mp4"
 
 
 usar("tigres")
@@ -298,7 +344,7 @@ class Renderer:
                         return CERRADA, 1 if int((t - ln["t0"]) * 5) % 2 else 0
                     if t < ln["t1"] + 0.2:
                         return reaccion, 0
-        if any(0 <= t - b < 0.13 for b in cfg["parpadeos"]):
+        if any(0 <= t % 12.5 - b < 0.13 for b in cfg["parpadeos"]):        # se repiten cada 12.5 s
             return PARPADEO, 0
         return CERRADA, 1 if (t * 0.8) % 1 < 0.5 else 0     # respira
 

@@ -1,0 +1,632 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body { margin: 0; background: #080416; overflow: hidden; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// "¿Puedes seguir esta batería?": The Kids Aren't Alright por niveles, con carriles que caen como en Guitar Hero
+// (ADR-024). Una pista neón sale del sol retro y llega a una línea de golpe con cinco pads (tarola, hi-hat, tom,
+// piso, platillo); el bombo es una barra que cruza toda la pista. Cada golpe prende su pad y suelta chispas.
+// Los golpes, compases (el tempo cambia por sección) y textos vienen de punk.py, los mismos que el audio.
+// grabar.js llama a window.cargar(datos) y luego a window.dibujar(t); todo sale de t.
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+const W = 1080, H = 1920;
+const V = 9;                                    // velocidad de la pista (unidades por segundo)
+const ANCHO_CARRIL = 1.05, CARRILES = 5;
+const ANCHO = ANCHO_CARRIL * CARRILES;
+const LARGO = 140;
+const VE = 5.5;                                 // segundos de pista que se ven por delante
+// Color de cada carril (MOTION.md: cian y magenta mandan; amarillo, verde y naranja son acentos de juego)
+const COLORES = { 'TAROLA': 0xff32d2, 'HI-HAT': 0xffe146, 'TOM': 0x00f0ff, 'PISO': 0x5affa0, 'PLATILLO': 0xff8c3c,
+  'BOMBO': 0xaa64ff };
+const HEX = c => '#' + c.toString(16).padStart(6, '0');
+const xDeCarril = i => (i - (CARRILES - 1) / 2) * ANCHO_CARRIL;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.autoClear = false;
+document.body.appendChild(renderer.domElement);
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(0x080416);
+escena.fog = new THREE.Fog(0x12062a, 28, 62);
+const camara = new THREE.PerspectiveCamera(50, W / H, 0.1, 400);
+
+escena.add(new THREE.HemisphereLight(0xb9b4ff, 0x2a0a3a, 0.8));
+const luz = new THREE.DirectionalLight(0xffffff, 1.2);
+luz.position.set(-3, 8, 6);
+escena.add(luz);
+
+// ------------------------------------------------------------------ fondo: estrellas, cielo, sol, montañas, piso
+{
+  const n = 700, pos = new Float32Array(n * 3);
+  let s = 1998;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < n; i++) pos.set([(rnd() - 0.5) * 320, 10 + rnd() * 130, -150 - rnd() * 40], i * 3);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  escena.add(new THREE.Points(geo, new THREE.PointsMaterial({ color: 0x9a8cff, size: 1.4, sizeAttenuation: false, fog: false })));
+}
+escena.add(new THREE.Mesh(new THREE.SphereGeometry(250, 32, 16), new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `varying vec3 vP;
+    void main(){
+      float y = normalize(vP).y;
+      vec3 arriba = vec3(0.0024, 0.0012, 0.0080), abajo = vec3(0.0103, 0.0024, 0.0252);
+      gl_FragColor = vec4(mix(abajo, arriba, smoothstep(-0.05, 0.45, y)), 1.0);
+    }`,
+})));
+// Sol retro de franjas al final de la pista; late con el bombo
+const sol = new THREE.Mesh(new THREE.CircleGeometry(24, 96), new THREE.ShaderMaterial({
+  fog: false, uniforms: { latido: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform float latido; varying vec2 vUv;
+    void main(){
+      vec3 c = mix(vec3(1.0,0.1,0.6), vec3(1.0,0.5,0.22), smoothstep(0.1, 0.95, vUv.y));
+      float franja = step(0.5, fract(vUv.y * 16.0)) + step(0.58, vUv.y);
+      if (franja < 0.5 && vUv.y < 0.58) discard;
+      gl_FragColor = vec4(c * (0.5 + 0.12 * latido), 1.0);
+    }`,
+}));
+sol.position.set(0, 2, -170);
+escena.add(sol);
+{
+  let s = 4242;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  const forma = new THREE.Shape(), filo = [];
+  forma.moveTo(-300, -5);
+  for (let x = -300; x <= 300; x += 9) {
+    const valle = Math.min(1, Math.abs(x) / 40);           // valle al centro: la pista sale de ahí
+    const y = (6 + Math.abs(Math.sin(x * 0.021)) * 16 + Math.sin(x * 0.07) * 6 + rnd() * 5) * valle;
+    forma.lineTo(x, y);
+    filo.push(new THREE.Vector3(x, y, 0));
+  }
+  forma.lineTo(300, -5);
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(new THREE.ShapeGeometry(forma), new THREE.MeshBasicMaterial({ color: 0x0c0418, fog: false })));
+  const linea = new THREE.Line(new THREE.BufferGeometry().setFromPoints(filo), new THREE.LineBasicMaterial({ color: 0xff32d2, fog: false }));
+  linea.position.z = 0.1;
+  g.add(linea);
+  g.position.set(0, -2, -150);
+  escena.add(g);
+}
+const Y_PISO = -2;
+const piso = new THREE.Mesh(new THREE.PlaneGeometry(500, 500), new THREE.ShaderMaterial({
+  uniforms: { avance: { value: 0 }, latido: { value: 0 } },
+  vertexShader: `varying vec3 vMundo;
+    void main(){ vec4 m = modelMatrix * vec4(position, 1.0); vMundo = m.xyz; gl_Position = projectionMatrix * viewMatrix * m; }`,
+  fragmentShader: `uniform float avance; uniform float latido; varying vec3 vMundo;
+    void main(){
+      vec2 c = vec2(vMundo.x, vMundo.z - avance) / 4.0;
+      vec2 paso = fwidth(c);
+      vec2 d = abs(fract(c - 0.5) - 0.5) / paso;
+      float linea = 1.0 - smoothstep(0.6, 1.6, min(d.x, d.y));
+      float lejos = 1.0 - smoothstep(0.05, 0.2, max(paso.x, paso.y));
+      float niebla = 1.0 - smoothstep(40.0, 150.0, length(vMundo.xz - cameraPosition.xz));
+      vec3 col = vec3(1.0, 0.16, 0.78) * (0.42 + 0.35 * latido);
+      gl_FragColor = vec4(vec3(0.0103, 0.0024, 0.0252) + col * linea * lejos * niebla, 1.0);
+    }`,
+}));
+piso.rotation.x = -Math.PI / 2;
+piso.position.y = Y_PISO;
+escena.add(piso);
+
+// ------------------------------------------------------------------ la pista
+// Superficie oscura con divisiones entre carriles y rieles cian; cada carril se apaga si no está en el nivel
+const pista = new THREE.Mesh(new THREE.PlaneGeometry(ANCHO + 0.3, LARGO), new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { activo: { value: [1, 1, 1, 1, 1] }, brillo: { value: 0 }, colores: { value: Object.values(COLORES).slice(0, 5).map(c => new THREE.Color(c)) } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform float activo[5]; uniform float brillo; uniform vec3 colores[5]; varying vec2 vUv;
+    void main(){
+      float x = vUv.x * ${(ANCHO + 0.3).toFixed(2)} - 0.15;
+      float lejos = smoothstep(0.0, 0.75, vUv.y);                      // se funde hacia el horizonte
+      int i = int(clamp(floor(x / ${ANCHO_CARRIL.toFixed(2)}), 0.0, 4.0));
+      float a = activo[0];
+      vec3 tinte = colores[0];
+      for (int k = 0; k < 5; k++) if (k == i) { a = activo[k]; tinte = colores[k]; }
+      vec3 base = vec3(0.012, 0.006, 0.03) + tinte * (0.028 + 0.03 * brillo) * a;
+      float div = abs(fract(x / ${ANCHO_CARRIL.toFixed(2)} + 0.5) - 0.5) * ${ANCHO_CARRIL.toFixed(2)};
+      float linea = (1.0 - smoothstep(0.0, 0.025, div)) * step(0.0, x) * step(x, ${ANCHO.toFixed(2)});
+      float riel = 1.0 - smoothstep(0.03, 0.08, min(abs(x), abs(x - ${ANCHO.toFixed(2)})));
+      vec3 c = base + vec3(0.55, 0.45, 0.9) * linea * 0.35 + vec3(0.0, 0.94, 1.0) * riel * (0.45 + 0.35 * brillo);
+      gl_FragColor = vec4(c, (0.94 - 0.2 * lejos) * (1.0 - smoothstep(0.85, 1.0, vUv.y)));
+    }`,
+}));
+pista.rotation.x = -Math.PI / 2;
+pista.position.set(0, 0, -LARGO / 2 + 2);
+escena.add(pista);
+
+// Todo lo que viaja por la pista va en `rio`: en local cada cosa está en z = −t·V, y el grupo avanza con el tiempo
+const rio = new THREE.Group();
+escena.add(rio);
+const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p3 = new THREE.Vector3(), s3 = new THREE.Vector3();
+const color = new THREE.Color();
+function matEmisivo(fuerza = 1.4) {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.2 });
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
+      `#include <emissivemap_fragment>\n#ifdef USE_INSTANCING_COLOR\n totalEmissiveRadiance += vColor.rgb * ${fuerza.toFixed(2)};\n#endif`);
+  };
+  return m;
+}
+function instancias(geo, n, mat) {
+  const im = new THREE.InstancedMesh(geo, mat, n);
+  im.frustumCulled = false;
+  im.setColorAt(0, color.set(0));
+  rio.add(im);
+  return im;
+}
+
+// Líneas de tiempo (una por negra, más fuerte al empezar el compás)
+let lineas, gemas, platillos, bombos;
+const geoGema = new THREE.BoxGeometry(ANCHO_CARRIL * 0.84, 0.22, 0.5);
+const geoPlatillo = new THREE.CylinderGeometry(0.46, 0.46, 0.1, 40);
+const geoBombo = new THREE.BoxGeometry(ANCHO * 0.98, 0.13, 0.3);
+
+// Línea de golpe y pads
+const linea0 = new THREE.Mesh(new THREE.BoxGeometry(ANCHO + 0.3, 0.05, 0.08), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+linea0.position.set(0, 0.03, 0);
+escena.add(linea0);
+const barraBombo = new THREE.Mesh(new THREE.BoxGeometry(ANCHO + 0.3, 0.06, 0.24), new THREE.MeshBasicMaterial({
+  color: COLORES.BOMBO, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+barraBombo.position.set(0, 0.04, 0);
+escena.add(barraBombo);
+const nombres = ['TAROLA', 'HI-HAT', 'TOM', 'PISO', 'PLATILLO'];
+const pads = nombres.map((n, i) => {
+  const g = new THREE.Group();
+  const aro = new THREE.Mesh(new THREE.TorusGeometry(0.38, 0.05, 12, 48),
+    new THREE.MeshBasicMaterial({ color: COLORES[n], transparent: true }));
+  aro.rotation.x = -Math.PI / 2;
+  const centro = new THREE.Mesh(new THREE.CircleGeometry(0.33, 40),
+    new THREE.MeshBasicMaterial({ color: COLORES[n], transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  centro.rotation.x = -Math.PI / 2;
+  centro.position.y = 0.01;
+  const onda = new THREE.Mesh(new THREE.RingGeometry(0.36, 0.44, 48),
+    new THREE.MeshBasicMaterial({ color: COLORES[n], transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  onda.rotation.x = -Math.PI / 2;
+  onda.position.y = 0.02;
+  g.add(aro, centro, onda);
+  g.position.set(xDeCarril(i), 0.05, 0);
+  escena.add(g);
+  return { g, aro, centro, onda };
+});
+
+// Chispas: cada golpe suelta unas cuantas (azar con semilla = el golpe), con gravedad
+const MAX_CHISPAS = 1400;
+const chispasGeo = new THREE.BufferGeometry();
+chispasGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_CHISPAS * 3), 3));
+chispasGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAX_CHISPAS * 3), 3));
+const chispas = new THREE.Points(chispasGeo, new THREE.PointsMaterial({ size: 0.11, vertexColors: true, transparent: true,
+  blending: THREE.AdditiveBlending, depthWrite: false }));
+chispas.frustumCulled = false;
+escena.add(chispas);
+
+// ------------------------------------------------------------------ capa 2D: textos, contador, combo, cierre
+const hud = new THREE.Scene();
+const camaraHud = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0, 1);
+const lienzo = document.createElement('canvas');
+lienzo.width = W;
+lienzo.height = H;
+const ctx = lienzo.getContext('2d');
+const texHud = new THREE.CanvasTexture(lienzo);
+texHud.colorSpace = THREE.NoColorSpace;
+texHud.minFilter = THREE.LinearFilter;
+texHud.generateMipmaps = false;
+// Modo "screen": el texto se mezcla encima sin bloom propio (MOTION.md)
+const capaTexto = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false,
+  blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+  blendSrc: THREE.OneMinusDstColorFactor, blendDst: THREE.OneFactor,
+  uniforms: { mapa: { value: texHud } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: 'uniform sampler2D mapa; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(mapa, vUv).rgb, 1.0); }',
+}));
+capaTexto.renderOrder = 3;
+const sombra = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false, uniforms: { fuerza: { value: 0.45 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: `uniform float fuerza; varying vec2 vUv;
+    void main(){ float y = (1.0 - vUv.y) * 1920.0; gl_FragColor = vec4(0.031, 0.016, 0.086, fuerza * (1.0 - smoothstep(420.0, 700.0, y))); }`,
+}));
+sombra.renderOrder = 1;
+const destello = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { fuerza: { value: 0 } },
+  vertexShader: 'void main(){ gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: 'uniform float fuerza; void main(){ gl_FragColor = vec4(vec3(1.0, 0.85, 1.0) * fuerza, 1.0); }',
+}));
+destello.renderOrder = 4;
+hud.add(sombra, capaTexto, destello);
+
+const FUENTE = (peso, px, familia = 'Futura') => `${peso} ${px}px ${familia}, "Apple Color Emoji"`;
+function textoNeon(texto, x, y, colorTxt, halo, blurs = [26, 10], nucleo = '#ffffff') {
+  ctx.fillStyle = colorTxt;
+  ctx.shadowColor = halo;
+  for (const b of blurs) {
+    ctx.shadowBlur = b;
+    ctx.fillText(texto, x, y);
+  }
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = nucleo;
+  ctx.fillText(texto, x, y);
+}
+
+// ------------------------------------------------------------------ posproceso: brillo y glitch
+const compositor = new EffectComposer(renderer);
+compositor.addPass(new RenderPass(escena, camara));
+const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 0.6, 0.4, 0.3);
+compositor.addPass(bloom);
+compositor.addPass(new OutputPass());
+const pasoHud = new RenderPass(hud, camaraHud);
+pasoHud.clear = false;
+compositor.addPass(pasoHud);
+const glitch = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, fuerza: { value: 0 }, semilla: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float fuerza; uniform float semilla; varying vec2 vUv;
+    float h(float x){ return fract(sin(x * 127.1 + semilla * 311.7) * 43758.5453); }
+    void main(){
+      if (fuerza <= 0.0) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
+      vec2 uv = vUv;
+      float banda = floor(uv.y * (14.0 + 50.0 * h(1.0)));
+      if (h(banda + 3.0) < 0.12 + 0.55 * fuerza) uv.x += (h(banda + 7.0) - 0.5) * 0.4 * fuerza;
+      float s = 0.004 + 0.035 * fuerza;
+      vec3 c = vec3(texture2D(tDiffuse, uv + vec2(s, 0.0)).r, texture2D(tDiffuse, uv).g, texture2D(tDiffuse, uv - vec2(s, 0.0)).b);
+      c *= 1.0 - fuerza * 0.25 * (0.5 + 0.5 * sin(vUv.y * 2600.0));
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+});
+compositor.addPass(glitch);
+
+// ------------------------------------------------------------------ utilidades
+const clamp01 = x => Math.min(1, Math.max(0, x));
+const salida = x => 1 - Math.pow(1 - clamp01(x), 3);
+const rebote = x => { x = clamp01(x); const c = 1.9; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+function ultimo(lista, t) {                                                   // último tiempo <= t
+  let lo = 0, hi = lista.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (lista[m] <= t) lo = m + 1; else hi = m; }
+  return lo > 0 ? lista[lo - 1] : -99;
+}
+function cuantos(lista, t) {                                                  // cuántos tiempos <= t
+  let lo = 0, hi = lista.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (lista[m] <= t) lo = m + 1; else hi = m; }
+  return lo;
+}
+function azar(semilla) {
+  let a = semilla >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ------------------------------------------------------------------ datos
+let D, golpes, tiempos = {}, tTodos = [], negras = [], tBanda, tCierre, tFin, tLento;
+function seccionEn(t) {
+  let i = 0;
+  while (i + 1 < D.secciones.length && D.secciones[i + 1].t0 <= t) i++;
+  return D.secciones[i];
+}
+function compasEn(t) {
+  let i = 0;
+  while (i + 1 < D.compases.length && D.compases[i + 1][0] <= t) i++;
+  return D.compases[i];
+}
+
+window.cargar = (d) => {
+  D = d;
+  golpes = D.golpes.map(([t, carril, paso, fuerza, capa]) => ({ t, carril, paso, fuerza, capa }));
+  for (const n of [...nombres, 'BOMBO']) tiempos[n] = golpes.filter(g => g.capa === n).map(g => g.t);
+  tTodos = golpes.map(g => g.t);
+  for (const [t0, dur] of D.compases) for (let b = 0; b < 4; b++) negras.push([t0 + b * dur / 4, b === 0]);
+  tBanda = D.banda; tCierre = D.cierre; tFin = D.fin; tLento = D.lento;
+  lineas = instancias(new THREE.BoxGeometry(ANCHO, 0.008, 0.025), negras.length, new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  lineas.material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1 });
+  const nGemas = golpes.filter(g => g.carril >= 0 && g.capa !== 'PLATILLO').length;
+  gemas = instancias(geoGema, nGemas, matEmisivo(1.5));
+  platillos = instancias(geoPlatillo, golpes.filter(g => g.capa === 'PLATILLO').length, matEmisivo(1.5));
+  bombos = instancias(geoBombo, golpes.filter(g => g.capa === 'BOMBO').length, matEmisivo(1.8));
+  lineas.setColorAt(0, color.set(0));
+  for (const [i, [t, fuerte]] of negras.entries()) {
+    lineas.setMatrixAt(i, m4.compose(p3.set(0, 0.006, -t * V), q.identity(), s3.set(1, 1, 1)));
+    lineas.setColorAt(i, color.setRGB(0.6, 0.7, 0.85).multiplyScalar(fuerte ? 0.55 : 0.22));
+  }
+  lineas.instanceMatrix.needsUpdate = true;
+  lineas.instanceColor.needsUpdate = true;
+};
+
+// Tiempo que se ve: en el tape stop del reto la pista se frena igual que el audio
+function tiempoVisto(t) {
+  const n = 0.45, a = tLento - n;
+  if (t < a || t >= tLento) return t;
+  const u = (t - a) / n;
+  return a + n * (1 - Math.pow(1 - u, 1.7)) / 1.7;
+}
+
+// ------------------------------------------------------------------ dibujar un cuadro
+const proy = new THREE.Vector3();
+function aPantalla(x, y, z) {
+  proy.set(x, y, z).project(camara);
+  return [(proy.x + 1) / 2 * W, (1 - proy.y) / 2 * H];
+}
+
+window.dibujar = (t) => {
+  const tv = tiempoVisto(t);
+  const sec = seccionEn(t);
+  const conBanda = t >= tBanda || sec.toma === 'reto';
+  const [c0, cDur, bpm] = compasEn(t);
+  const tutorial = !conBanda && sec.toma !== 'reto';
+  const latido = Math.exp(-Math.max(0, tv - ultimo(tiempos.BOMBO, tv)) * 9);
+  const fin = t >= tFin ? clamp01((t - tFin) / 0.12) : 0;
+  const apaga = t >= tFin ? Math.exp(-(t - tFin) * 1.6) : 1;
+
+  // Cámara detrás de la pista, un poco alta; con la banda empuja con el bombo; en el cierre sube despacio
+  const empuje = conBanda ? 0.08 * latido : 0;
+  const sube = t >= tCierre ? salida((t - tCierre) / 4) : 0;
+  camara.position.set(0, 7.6 - empuje + 1.0 * sube, 12.8 + 0.15 * latido * (conBanda ? 1 : 0) + 1.5 * sube);
+  camara.lookAt(0, 0.6 * sube, -9);
+  camara.updateMatrixWorld();
+
+  // Carriles activos del nivel
+  const activos = sec.capas || [];
+  const activo = n => (activos.includes(n) ? 1 : 0);
+  pista.material.uniforms.activo.value = nombres.map(n => 0.25 + 0.75 * activo(n));
+  pista.material.uniforms.brillo.value = (conBanda ? 0.6 + 0.6 * latido : 0.2 * latido) * apaga;
+
+  // La pista avanza
+  rio.position.z = tv * V;
+  // Gemas: solo las que vienen (de ahora a VE segundos); las que ya pasaron se esconden
+  let ig = 0, ip = 0, ib = 0;
+  for (const g of golpes) {
+    const falta = g.t - tv;
+    const visible = falta > -0.005 && falta < VE;
+    const z = -g.t * V;
+    const cerca = clamp01(1 - falta / 0.35);                  // se prende al llegar
+    const esc = visible ? 1 : 0;
+    color.set(COLORES[g.capa]).multiplyScalar((0.9 + 0.6 * cerca) * (0.8 + 0.2 * g.fuerza));
+    if (g.capa === 'BOMBO') {
+      bombos.setMatrixAt(ib, m4.compose(p3.set(0, 0.05, z), q.identity(), s3.set(esc, esc, esc)));
+      bombos.setColorAt(ib++, color);
+    } else if (g.capa === 'PLATILLO') {
+      platillos.setMatrixAt(ip, m4.compose(p3.set(xDeCarril(g.carril), 0.12, z), q.identity(), s3.set(esc, esc, esc)));
+      platillos.setColorAt(ip++, color);
+    } else {
+      const ancho = g.capa === 'HI-HAT' ? 0.8 : 1;
+      gemas.setMatrixAt(ig, m4.compose(p3.set(xDeCarril(g.carril), 0.1, z), q.identity(), s3.set(esc * ancho, esc, esc)));
+      gemas.setColorAt(ig++, color);
+    }
+  }
+  for (const im of [gemas, platillos, bombos]) { im.instanceMatrix.needsUpdate = true; im.instanceColor.needsUpdate = true; }
+  // Líneas de tiempo: las que ya pasaron la línea de golpe se esconden
+  for (const [i, [tn]] of negras.entries()) {
+    const e = tn - tv > -0.02 && tn - tv < VE ? 1 : 0;
+    lineas.setMatrixAt(i, m4.compose(p3.set(0, 0.006, -tn * V), q.identity(), s3.set(e, e, e)));
+  }
+  lineas.instanceMatrix.needsUpdate = true;
+  lineas.material.opacity = 0.9 * apaga;
+
+  // Pads: se encienden con su golpe y sueltan una onda
+  for (const [i, n] of nombres.entries()) {
+    const dt = tv - ultimo(tiempos[n], tv);
+    const k = Math.exp(-Math.max(0, dt) * 10);
+    const a = 0.25 + 0.75 * activo(n);
+    pads[i].aro.material.opacity = (0.45 + 0.55 * k) * a * apaga + fin * 0.6 * Math.exp(-(t - tFin) * 2);
+    pads[i].centro.material.opacity = (0.08 + 0.9 * k) * a * apaga;
+    pads[i].g.scale.setScalar(1 + 0.18 * k);
+    const ko = clamp01(dt / 0.35);
+    pads[i].onda.scale.setScalar(1 + 1.6 * ko);
+    pads[i].onda.material.opacity = dt >= 0 && dt < 0.35 ? (1 - ko) * 0.8 * a : 0;
+  }
+  const kb = Math.exp(-Math.max(0, tv - ultimo(tiempos.BOMBO, tv)) * 9);
+  barraBombo.material.opacity = 0.05 + 0.75 * kb * (tutorial && !activos.includes('BOMBO') ? 0.3 : 1);
+  barraBombo.scale.set(1, 1, 1 + 1.5 * kb);
+  linea0.material.color.setRGB(0.45 + 0.3 * kb, 0.42, 0.62);
+
+  // Chispas de los golpes de los últimos 0.5 s
+  const posA = chispasGeo.attributes.position.array, colA = chispasGeo.attributes.color.array;
+  let nc = 0;
+  const desde = cuantos(tTodos, tv - 0.5), hasta = cuantos(tTodos, tv);
+  for (let gi = desde; gi < hasta && nc < MAX_CHISPAS; gi++) {
+    const g = golpes[gi], dt = tv - g.t;
+    const bombo = g.capa === 'BOMBO';
+    const r = azar(gi * 7919 + 13);
+    const cuantas = bombo ? 16 : conBanda ? 14 : 9;
+    color.set(COLORES[g.capa]);
+    for (let k = 0; k < cuantas && nc < MAX_CHISPAS; k++, nc++) {
+      const x0 = bombo ? (r() - 0.5) * ANCHO : xDeCarril(g.carril);
+      const ang = r() * Math.PI * 2, vel = 1.5 + r() * 3.5, vy = 2.5 + r() * 4;
+      const fr = 1 - Math.exp(-dt * 3.2);                        // freno de aire
+      posA[nc * 3] = x0 + Math.cos(ang) * vel * fr / 3.2;
+      posA[nc * 3 + 1] = 0.1 + vy * fr / 3.2 - 4.9 * dt * dt;
+      posA[nc * 3 + 2] = Math.sin(ang) * vel * fr / 3.2 * 0.6;
+      const vida = Math.max(0, 1 - dt / 0.5);
+      const blanco = Math.exp(-dt * 14);                          // nace casi blanca y se enfría a su color
+      colA[nc * 3] = (color.r + (1 - color.r) * blanco) * vida;
+      colA[nc * 3 + 1] = (color.g + (1 - color.g) * blanco) * vida;
+      colA[nc * 3 + 2] = (color.b + (1 - color.b) * blanco) * vida;
+    }
+  }
+  chispasGeo.setDrawRange(0, nc);
+  chispasGeo.attributes.position.needsUpdate = true;
+  chispasGeo.attributes.color.needsUpdate = true;
+
+  sol.material.uniforms.latido.value = latido;
+  sol.scale.setScalar(1 + 0.02 * latido);
+  piso.material.uniforms.avance.value = tv * V;
+  piso.material.uniforms.latido.value = latido * (conBanda ? 1 : 0.4);
+  bloom.strength = (conBanda ? 0.6 + 0.15 * latido : 0.5 + 0.08 * latido) * (0.6 + 0.4 * apaga);
+  destello.material.uniforms.fuerza.value = (t >= tBanda ? 0.7 * Math.exp(-(t - tBanda) * 6) : 0)
+    + (t >= tFin ? 0.9 * Math.exp(-(t - tFin) * 5) : 0);
+
+  // ---------------------------------------------------------------- capa 2D
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+
+  // Texto principal de la sección, palabra por palabra (MOTION.md: 0.18 s por palabra, 0.17 s entre palabras)
+  const enCierre = t >= tCierre;
+  const tSec = sec.texto ? sec : D.secciones.filter(s => s.t0 <= t && s.texto).at(-1);
+  if (tSec && !(tSec.toma === 'banda' && t > tSec.t0 + 3.2)) {
+    const palabras = tSec.texto.split(' ');
+    const tam = enCierre ? 76 : 70;
+    ctx.font = FUENTE('bold', tam);
+    const espacio = ctx.measureText(' ').width;
+    const lineasTxt = [[]];
+    let ancho = 0;
+    for (const [i, p] of palabras.entries()) {
+      const w = ctx.measureText(p).width;
+      if (ancho + w > 940 && lineasTxt.at(-1).length) { lineasTxt.push([]); ancho = 0; }
+      lineasTxt.at(-1).push({ p, w, i });
+      ancho += w + espacio;
+    }
+    const y0 = 250 - (lineasTxt.length - 1) * 45;
+    ctx.textAlign = 'left';
+    for (const [li, ln] of lineasTxt.entries()) {
+      const total = ln.reduce((a, b) => a + b.w, 0) + espacio * (ln.length - 1);
+      let x = W / 2 - total / 2;
+      for (const { p, w, i } of ln) {
+        const k = salida((t - tSec.t0 - 0.05 - i * 0.17) / 0.18);
+        if (k > 0) {
+          ctx.save();
+          ctx.globalAlpha = k;
+          ctx.translate(x + w / 2, y0 + li * 90 + 20 * (1 - k));
+          ctx.scale(0.9 + 0.1 * k, 0.9 + 0.1 * k);
+          ctx.textAlign = 'center';
+          const clave = /^\d\./.test(p) || p.includes('🔥') || p.includes('🥁');
+          textoNeon(p, 0, 0, clave ? '#ff78e6' : '#00dcff', clave ? '#ff32d2' : '#00dcff', [24, 9]);
+          ctx.restore();
+        }
+        x += w + espacio;
+      }
+    }
+    ctx.textAlign = 'center';
+  }
+
+  // Nombre de la canción: en la promesa (grande) y al entrar la banda (chico)
+  const promesa = D.secciones.find(s => s.toma === 'promesa');
+  const enPromesa = t >= promesa.t0 + 0.3 && t < promesa.t1 + 1.5;
+  const enEntrada = t >= tBanda + 0.4 && t < tBanda + 5;
+  if (enPromesa || enEntrada) {
+    const t0 = enPromesa ? promesa.t0 + 0.3 : tBanda + 0.4;
+    const k = salida((t - t0) / 0.3) * clamp01(((enPromesa ? promesa.t1 + 1.5 : tBanda + 5) - t) / 0.3);
+    ctx.globalAlpha = k;
+    ctx.font = FUENTE('bold', 46);
+    textoNeon(D.cancion[0], W / 2, 400, '#ffffff', '#00dcff', [18, 6]);
+    ctx.font = FUENTE('600', 34, '"Avenir Next"');
+    ctx.fillStyle = '#b9b4ff';
+    ctx.fillText(D.cancion[1], W / 2, 450);
+    ctx.globalAlpha = 1;
+  }
+
+  // Contador 1 · 2 · 3 · 4 y BPM mientras se practica (lento y en la subida de velocidad)
+  if (!conBanda && sec.toma !== 'promesa' || sec.toma === 'promesa' && t > promesa.t0 + 1.2) {
+    const y = enPromesa ? 540 : 400;
+    const beat = Math.floor((t - c0) / (cDur / 4));
+    const tarola = sec.toma === 'bombo-tarola';
+    for (let b = 0; b < 4; b++) {
+      const x = W / 2 + (b - 1.5) * 120;
+      const on = b === beat;
+      const k = on ? Math.exp(-((t - c0) - b * cDur / 4) * 6) : 0;
+      const colTar = tarola && (b === 1 || b === 3);
+      ctx.font = FUENTE('bold', Math.round(56 + 18 * k));
+      ctx.globalAlpha = on ? 1 : 0.35;
+      textoNeon(String(b + 1), x, y + 20, colTar ? '#ff32d2' : '#00f0ff', colTar ? '#ff32d2' : '#00f0ff', on ? [22, 8] : [6]);
+      if (b < 3) { ctx.globalAlpha = 0.3; ctx.fillStyle = '#b9b4ff'; ctx.font = FUENTE('bold', 40); ctx.fillText('·', x + 60, y + 12); }
+    }
+    ctx.globalAlpha = 1;
+    // BPM: pastilla chica; en la subida de velocidad crece y salta en cada cambio
+    const rapido = sec.toma.startsWith('rapido');
+    const kc = rapido ? Math.exp(-(t - c0) * 5) : 0;
+    ctx.font = FUENTE('bold', rapido ? Math.round(58 + 20 * kc) : 34);
+    textoNeon(`${bpm} BPM`, W / 2, y + (rapido ? 110 : 80), rapido ? '#ffe146' : '#b9b4ff', rapido ? '#ff8c3c' : '#6a4cff', rapido ? [24, 8] : [8]);
+  }
+
+  // Nombres de los carriles bajo los pads (solo mientras se aprende)
+  if (tutorial) {
+    ctx.font = FUENTE('bold', 26);
+    for (const [i, n] of nombres.entries()) {
+      const [sx, sy] = aPantalla(xDeCarril(i), 0, 0.75);
+      ctx.globalAlpha = 0.25 + 0.75 * activo(n);
+      textoNeon(n, sx, Math.min(sy + 10, 1585), HEX(COLORES[n]), HEX(COLORES[n]), [10]);
+    }
+    const [bx, by] = aPantalla(-ANCHO / 2 - 0.1, 0, 0);
+    ctx.globalAlpha = activo('BOMBO') ? 1 : 0.3;
+    ctx.textAlign = 'right';
+    ctx.font = FUENTE('bold', 24);
+    textoNeon('BOMBO', bx - 8, by + 8, HEX(COLORES.BOMBO), HEX(COLORES.BOMBO), [10]);
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = 1;
+  }
+
+  // Combo de la banda: cuenta los golpes desde que entra (sin pasar de la zona segura)
+  if (t >= tBanda && t < tCierre + 0.5) {
+    const n = cuantos(tTodos, tv) - cuantos(tTodos, tBanda - 0.001);
+    const mult = n >= 150 ? 4 : n >= 60 ? 3 : n >= 20 ? 2 : 1;
+    const ult = ultimo(tTodos, tv);
+    const k = Math.exp(-Math.max(0, tv - ult) * 12);
+    ctx.globalAlpha = clamp01((t - tBanda - 5.1) / 0.3) * clamp01((tCierre + 0.5 - t) / 0.5);
+    ctx.font = FUENTE('bold', Math.round(64 + 8 * k));
+    textoNeon(`${n}`, W / 2, 420, '#ffffff', '#00dcff', [22, 8]);
+    ctx.font = FUENTE('bold', 30);
+    ctx.letterSpacing = '6px';
+    textoNeon(`COMBO  ×${mult}`, W / 2, 470, mult >= 4 ? '#ff8c3c' : '#ffe146', '#ff8c3c', [14]);
+    ctx.letterSpacing = '0px';
+    ctx.globalAlpha = 1;
+  }
+
+  // Cierre: NK aparece mientras las últimas notas siguen cayendo
+  if (enCierre) {
+    const k = salida((t - tCierre - 0.5) / 0.5);
+    ctx.globalAlpha = k;
+    ctx.font = '600 44px "Avenir Next"';
+    textoNeon(D.cierreTexto, W / 2, 360, '#00dcff', '#00dcff', [16, 6]);
+    const kn = rebote((t - tCierre - 1.0) / 0.6);
+    ctx.globalAlpha = clamp01(kn);
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.round(230 * (0.8 + 0.2 * kn) * (1 + 0.04 * latido))}px Futura`;
+    ctx.textAlign = 'right';
+    textoNeon('N', W / 2 + 6, 640, '#00f0ff', '#00f0ff', [50, 22]);
+    ctx.textAlign = 'left';
+    textoNeon('K', W / 2 - 6, 640, '#ff32d2', '#ff32d2', [50, 22]);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 34px Futura';
+    ctx.letterSpacing = '10px';
+    textoNeon('NEON KEYS', W / 2, 790, '#ff32d2', '#ff32d2', [16]);
+    ctx.letterSpacing = '0px';
+    ctx.textBaseline = 'alphabetic';
+    ctx.globalAlpha = 1;
+  }
+  texHud.needsUpdate = true;
+
+  // Glitch en el tape stop del reto (la pista se traba al frenarse)
+  glitch.uniforms.fuerza.value = t >= tLento - 0.3 && t < tLento + 0.15 ? 0.6 * (1 - Math.abs(t - tLento) / 0.3) : 0;
+  glitch.uniforms.semilla.value = Math.round(t * 30);
+
+  renderer.clear();
+  compositor.render();
+};
+window.listo = true;
+</script>
+</body>
+</html>

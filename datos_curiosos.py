@@ -5,10 +5,10 @@ La voz en off se agrega después en TikTok, por eso la música va baja.
 Las escenas se definen en SCENES; las palabras entre *asteriscos* se resaltan en magenta.
 
 Uso:
-    .venv/bin/python datos_curiosos.py                 # genera out/videos/dato-la-bamba.mp4
+    .venv/bin/python datos_curiosos.py                 # genera out/videos/datos/dato-la-bamba.mp4
     .venv/bin/python datos_curiosos.py --preview 6     # solo un cuadro PNG en t=6s
     .venv/bin/python datos_curiosos.py --narracion ~/Downloads/la-bamba-narration.mp3
-                                                       # con voz → out/videos/dato-la-bamba-voz.mp4
+                                                       # con voz → out/videos/datos/dato-la-bamba-voz.mp4
 """
 
 import argparse
@@ -78,12 +78,12 @@ def build_scenes_from_voice(script, times):
     return scenes, round(times[-1][1] + VOICE_OFFSET + TAIL, 2)
 
 
-MUSIC = ROOT / "out" / "videos" / "la-bamba.mp4"
+MUSIC = ROOT / "out" / "videos" / "piano" / "la-bamba.mp4"
 MUSIC_START = 8.2      # entra justo en "Para bailar la bamba"
 MUSIC_VOLUME = 0.55    # baja, para que se escuche la voz en off
 MUSIC_UNDER_VOICE = 0.18   # con narración, la música va todavía más baja
 BPM = 147              # el anillo del disco late al ritmo
-OUTPUT = ROOT / "out" / "videos" / "dato-la-bamba.mp4"
+OUTPUT = ROOT / "out" / "videos" / "datos" / "dato-la-bamba.mp4"
 
 # --- Layout ---
 TAG_Y = 330

@@ -1,0 +1,1034 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body { margin: 0; background: #050821; overflow: hidden; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// "¿Quieres aprender a hacer esto?": un trance bailable y poderoso en el secuenciador de la serie de beats (ADR-022, ADR-030).
+// Parte de la escena del psytrance (ADR-027): abre con el trance terminado (el secuenciador lleno y un escenario de
+// festival con láseres); con el tape stop la imagen se congela y todo se cae a las baldosas. Luego los 16 pasos × 6
+// carriles se llenan capa por capa (kick, bajo, clap, hats, pad cortado, arpegio). Paleta "amanecer de festival"
+// (sale del JSON). En el break unos láseres suben al cielo; en el drop las baldosas sueltan piezas que arman el
+// escenario otra vez (dos torres, armadura y un aro que gira) y salen abanicos de láseres que barren con el lead.
+// Glitch y cierre NK. Los golpes, textos y tiempos vienen de trance.py (los mismos que el audio). grabar.js llama a
+// window.cargar(datos) y luego a window.dibujar(t); todo sale de t, así una vista previa = el video.
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+const W = 1080, H = 1920;
+const PASOS = 16, FILAS = 6;
+const ALTO_BALDOSA = 0.18, TOPE = ALTO_BALDOSA / 2;
+// Altura de cada capa; el color sale de la paleta del JSON en cargar()
+const CAPAS = {
+  'KICK': { alto: 1.6 }, 'BAJO': { alto: 1.0 }, 'CLAP': { alto: 1.2 }, 'HATS': { alto: 0.9 },
+  'PAD': { alto: 1.1 }, 'PAD LARGO': { alto: 1.4 }, 'ARP': { alto: 1.2 }, 'ROLL': { alto: 0.9 },
+};
+// El trance terminado del gancho: los mismos bloques
+for (const c of ['KICK', 'BAJO', 'CLAP', 'HATS', 'PAD', 'ARP']) CAPAS[c + ' INTRO'] = CAPAS[c];
+// Carril que se resalta en cada toma
+const FOCO = { kick: ['KICK'], bajo: ['BAJO'], bajo2: ['BAJO'], clap: ['CLAP', 'HATS'], acordes: ['PAD'],
+  acordes2: ['PAD'], gate: ['PAD'], delay: ['PAD'], delay2: ['PAD'], arp: ['ARP'], arp2: ['ARP'],
+  sidechain: ['BAJO', 'PAD', 'ARP'], sidechain2: ['BAJO', 'PAD', 'ARP'], break: ['PAD', 'ARP'] };
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.autoClear = false;
+document.body.appendChild(renderer.domElement);
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(0x06020f);
+escena.fog = new THREE.Fog(0x06020f, 30, 110);
+const camara = new THREE.PerspectiveCamera(52, W / H, 0.1, 300);
+
+const hemi = new THREE.HemisphereLight(0xd8ffd0, 0x0a2a14, 0.75);
+escena.add(hemi);
+const luz = new THREE.DirectionalLight(0xffffff, 1.5);
+luz.position.set(-5, 10, 8);
+escena.add(luz);
+const contraluz = new THREE.DirectionalLight(0xb6ff3b, 1.4);   // el sol pinta los bordes con el color de la paleta
+contraluz.position.set(0, 3, -12);
+escena.add(contraluz);
+
+// ------------------------------------------------------------------ fondo: degradado, sol, montañas, piso
+const matEstrellas = new THREE.PointsMaterial({ color: 0xc8ff9a, size: 1.4, sizeAttenuation: false, fog: false });
+{
+  const n = 900, pos = new Float32Array(n * 3);
+  let s = 951;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < n; i++) pos.set([(rnd() - 0.5) * 300, 15 + rnd() * 120, -120 - rnd() * 40], i * 3);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  escena.add(new THREE.Points(geo, matEstrellas));
+}
+const cielo = new THREE.Mesh(new THREE.SphereGeometry(200, 32, 16), new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: { arriba: { value: new THREE.Color() }, abajo: { value: new THREE.Color() } },
+  vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform vec3 arriba; uniform vec3 abajo; varying vec3 vP;
+    void main(){
+      float y = normalize(vP).y;
+      gl_FragColor = vec4(mix(abajo, arriba, smoothstep(-0.05, 0.45, y)), 1.0);
+    }`,
+}));
+escena.add(cielo);
+
+// Sol retro de franjas que late con el kick (los dos colores salen de la paleta)
+const sol = new THREE.Mesh(new THREE.CircleGeometry(24, 96), new THREE.ShaderMaterial({
+  fog: false, uniforms: { latido: { value: 0 }, c0: { value: new THREE.Color() }, c1: { value: new THREE.Color() } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform float latido; uniform vec3 c0; uniform vec3 c1; varying vec2 vUv;
+    void main(){
+      vec3 c = mix(c1, c0, smoothstep(0.1, 0.95, vUv.y));
+      float franja = step(0.5, fract(vUv.y * 16.0)) + step(0.58, vUv.y);
+      if (franja < 0.5 && vUv.y < 0.58) discard;
+      gl_FragColor = vec4(c * (0.42 + 0.14 * latido), 1.0);
+    }`,
+}));
+const FONDO = new THREE.Vector3(0.61, 0, -0.79);
+const Y_PISO = -40;
+sol.position.copy(FONDO).multiplyScalar(120).setY(-32);
+sol.lookAt(0, -32, 0);
+escena.add(sol);
+
+// Montañas: silueta oscura con el filo del color de la paleta
+const matMontes = new THREE.MeshBasicMaterial({ color: 0x020a05, fog: false });
+const matFilo = new THREE.LineBasicMaterial({ color: 0xb6ff3b, fog: false });
+{
+  let s = 4242;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  const forma = new THREE.Shape();
+  const filo = [];
+  forma.moveTo(-260, -5);
+  for (let x = -260; x <= 260; x += 9) {
+    const y = 5 + Math.abs(Math.sin(x * 0.021)) * 13 + Math.sin(x * 0.07) * 6 + rnd() * 5 - Math.abs(x) * 0.02;
+    forma.lineTo(x, y);
+    filo.push(new THREE.Vector3(x, y, 0));
+  }
+  forma.lineTo(260, -5);
+  const montes = new THREE.Mesh(new THREE.ShapeGeometry(forma), matMontes);
+  const linea = new THREE.Line(new THREE.BufferGeometry().setFromPoints(filo), matFilo);
+  linea.position.z = 0.1;
+  const g = new THREE.Group();
+  g.add(montes, linea);
+  g.position.copy(FONDO).multiplyScalar(100).setY(Y_PISO);
+  g.lookAt(0, Y_PISO, 0);
+  escena.add(g);
+}
+
+// Piso synthwave (rejilla con shader) que avanza al tempo
+const piso = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.ShaderMaterial({
+  uniforms: { avance: { value: 0 }, latido: { value: 0 }, linea: { value: new THREE.Color() }, fondo: { value: new THREE.Color() } },
+  vertexShader: `varying vec3 vMundo;
+    void main(){ vec4 m = modelMatrix * vec4(position, 1.0); vMundo = m.xyz; gl_Position = projectionMatrix * viewMatrix * m; }`,
+  fragmentShader: `uniform float avance; uniform float latido; uniform vec3 linea; uniform vec3 fondo; varying vec3 vMundo;
+    void main(){
+      vec2 c = vec2(vMundo.x, vMundo.z + avance) / 5.0;
+      vec2 paso = fwidth(c);
+      vec2 d = abs(fract(c - 0.5) - 0.5) / paso;
+      float l = 1.0 - smoothstep(0.6, 1.6, min(d.x, d.y));
+      float lejos = 1.0 - smoothstep(0.05, 0.2, max(paso.x, paso.y));
+      float niebla = 1.0 - smoothstep(40.0, 110.0, length(vMundo.xz - cameraPosition.xz));
+      gl_FragColor = vec4(fondo + linea * (0.55 + 0.3 * latido) * l * lejos * niebla, 1.0);
+    }`,
+}));
+piso.rotation.x = -Math.PI / 2;
+piso.position.y = Y_PISO;
+escena.add(piso);
+
+// ------------------------------------------------------------------ el secuenciador
+const tablero = new THREE.Group();
+escena.add(tablero);
+const xDePaso = p => p - (PASOS - 1) / 2;
+const FILA = 1.3;
+const zDeFila = f => ((FILAS - 1) / 2 - f) * FILA;     // fila 0 (KICK) adelante
+
+const matBaldosa = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.32, metalness: 0.35 });
+matBaldosa.onBeforeCompile = (sh) => {
+  sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
+    '#include <emissivemap_fragment>\n#ifdef USE_INSTANCING_COLOR\n totalEmissiveRadiance += max(vColor.rgb - vec3(0.08), 0.0) * 1.2;\n#endif');
+};
+const baldosas = new THREE.InstancedMesh(new THREE.BoxGeometry(0.92, ALTO_BALDOSA, FILA - 0.08), matBaldosa, PASOS * FILAS);
+baldosas.frustumCulled = false;
+tablero.add(baldosas);
+const marco = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(PASOS + 0.1, 0.02, FILAS * FILA + 0.1)),
+  new THREE.LineBasicMaterial({ color: 0xb6ff3b, transparent: true, opacity: 0.5 }));
+marco.position.y = -TOPE - 0.02;
+tablero.add(marco);
+
+const matBloque = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.1 });
+matBloque.onBeforeCompile = (sh) => {
+  sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
+    '#include <emissivemap_fragment>\n#ifdef USE_INSTANCING_COLOR\n totalEmissiveRadiance += vColor.rgb * 0.42;\n#endif');
+};
+const MAX_BLOQUES = 90;
+const bloques = new THREE.InstancedMesh(new THREE.BoxGeometry(0.78, 1, 0.78), matBloque, MAX_BLOQUES);
+bloques.frustumCulled = false;
+tablero.add(bloques);
+
+// Anillos de luz que se abren en la baldosa al sonar
+const MAX_ANILLOS = 60;
+const geoAnillo = new THREE.RingGeometry(0.4, 0.47, 48);
+geoAnillo.rotateX(-Math.PI / 2);
+const anillos = new THREE.InstancedMesh(geoAnillo, new THREE.MeshBasicMaterial({
+  color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+}), MAX_ANILLOS);
+anillos.frustumCulled = false;
+tablero.add(anillos);
+
+// Chispas (tiro parabólico)
+const MAX_CHISPAS = 900;
+const geoChispas = new THREE.BufferGeometry();
+geoChispas.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_CHISPAS * 3), 3));
+geoChispas.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAX_CHISPAS * 3), 3));
+const puntoRedondo = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,255,255,1)');
+  r.addColorStop(0.35, 'rgba(255,255,255,0.6)');
+  r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})();
+const chispas = new THREE.Points(geoChispas, new THREE.PointsMaterial({
+  size: 0.16, map: puntoRedondo, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+}));
+chispas.frustumCulled = false;
+escena.add(chispas);
+
+// Cabezal de reproducción: franja de luz que recorre los pasos
+const cabezal = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.04, FILAS * FILA + 0.3), new THREE.MeshBasicMaterial({
+  color: 0xffffff, transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending, depthWrite: false,
+}));
+cabezal.position.y = TOPE + 0.03;
+tablero.add(cabezal);
+
+// ------------------------------------------------------------------ el escenario del drop: láseres de festival
+// Las piezas nacen en las baldosas (con el color de su carril) y vuelan a armar un escenario detrás del
+// secuenciador: dos torres, una armadura arriba y un aro de luz al centro que gira. De ahí salen abanicos de
+// láseres que barren con el supersaw (cada nota del lead hace destellar un grupo) y se avivan con cada kick. En el
+// gancho el escenario ya está armado; con el tape stop se congela y las piezas se caen de regreso a las baldosas.
+const Z_ESC = -9.5, Y_ARMADURA = 11, X_TORRE = 6.8, ARO = { y: 6.2, z: -10.2, r: 4.2, n: 40 };
+const matPieza = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.35, metalness: 0.4 });
+matPieza.onBeforeCompile = (sh) => {
+  sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
+    '#include <emissivemap_fragment>\n#ifdef USE_INSTANCING_COLOR\n totalEmissiveRadiance += vColor.rgb;\n#endif');
+};
+const PIEZAS = [];
+{
+  const r = azar(1380);
+  const agregar = (tipo, x, y, z, rz, k) => {
+    const fila = Math.floor(r() * FILAS), p = Math.floor(r() * PASOS);
+    PIEZAS.push({ tipo, k, destino: new THREE.Vector3(x, y, z), rz, fila, baldosa: p * FILAS + fila,
+      origen: new THREE.Vector3(xDePaso(p) + (r() - 0.5) * 0.4, TOPE, zDeFila(fila) + (r() - 0.5) * 0.6),
+      altura: Math.min(1, y / 14), orden: r() });
+  };
+  for (const lado of [-1, 1]) for (const dz of [-0.45, 0.45]) for (let k = 0; k < 18; k++) {
+    agregar('torre', lado * X_TORRE, 0.3 + k * 0.62, Z_ESC + dz, 0, k);
+  }
+  for (const fila of [0, 1]) for (let k = 0; k < 22; k++) {
+    agregar('armadura', -X_TORRE + k * (2 * X_TORRE / 21), Y_ARMADURA + fila * 0.62, Z_ESC, Math.PI / 2, k);
+  }
+  for (let k = 0; k < ARO.n; k++) agregar('aro', 0, ARO.y, ARO.z, 0, k);   // su lugar en el aro sale de t (gira)
+}
+const N_PIEZAS = PIEZAS.length;
+const piezas = new THREE.InstancedMesh(new THREE.BoxGeometry(0.78, 0.5, 0.78), matPieza, N_PIEZAS);
+piezas.frustumCulled = false;
+escena.add(piezas);                            // en coordenadas del mundo (vuelan desde el tablero)
+const EJE_Z = new THREE.Vector3(0, 0, 1);
+
+// Emisores de láser: 6 en la armadura, uno arriba de cada torre y uno grande en el centro del aro
+const EMISORES = [];
+for (let i = 0; i < 6; i++) EMISORES.push({ p: new THREE.Vector3(-5.5 + i * 2.2, Y_ARMADURA - 0.4, Z_ESC + 0.6), haz: 3, tipo: 'armadura', i });
+for (const lado of [-1, 1]) EMISORES.push({ p: new THREE.Vector3(lado * X_TORRE, Y_ARMADURA + 1.6, Z_ESC), haz: 4, tipo: 'torre', i: lado });
+EMISORES.push({ p: new THREE.Vector3(0, ARO.y, ARO.z + 0.4), haz: 8, tipo: 'aro', i: 0 });
+const HACES_BREAK = 6;
+const N_HACES = EMISORES.reduce((a, e) => a + e.haz, 0) + HACES_BREAK;
+// Cada haz: un hilo brillante y una bruma ancha y tenue alrededor (el humo de la pista)
+const geoHaz = new THREE.CylinderGeometry(0.035, 0.035, 1, 6, 1, true);
+geoHaz.translate(0, 0.5, 0);
+const geoBruma = new THREE.CylinderGeometry(0.28, 0.28, 1, 10, 1, true);
+geoBruma.translate(0, 0.5, 0);
+const nuevoHaz = () => new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, side: THREE.DoubleSide });
+const haces = new THREE.InstancedMesh(geoHaz, nuevoHaz(), N_HACES);
+const brumas = new THREE.InstancedMesh(geoBruma, nuevoHaz(), N_HACES);
+haces.frustumCulled = brumas.frustumCulled = false;
+escena.add(haces, brumas);
+const Y_ARRIBA = new THREE.Vector3(0, 1, 0);
+const LARGO_HAZ = 80;
+
+
+// ------------------------------------------------------------------ capa 2D: textos, transporte, etiquetas, cierre
+const hud = new THREE.Scene();
+const camaraHud = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0, 1);
+const lienzo = document.createElement('canvas');
+lienzo.width = W;
+lienzo.height = H;
+const ctx = lienzo.getContext('2d');
+const texHud = new THREE.CanvasTexture(lienzo);
+texHud.colorSpace = THREE.NoColorSpace;
+texHud.minFilter = THREE.LinearFilter;
+texHud.generateMipmaps = false;
+// Modo "screen": el texto se mezcla encima sin bloom propio (MOTION.md)
+const capaTexto = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false,
+  blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+  blendSrc: THREE.OneMinusDstColorFactor, blendDst: THREE.OneFactor,
+  uniforms: { mapa: { value: texHud } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: 'uniform sampler2D mapa; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(mapa, vUv).rgb, 1.0); }',
+}));
+capaTexto.renderOrder = 3;
+// Velo del cierre y sombra de arriba (color del fondo de la paleta, ya en sRGB)
+const colorHud = { value: new THREE.Vector3() };
+const velo = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false, uniforms: { opacidad: { value: 0 }, fondo: colorHud },
+  vertexShader: 'void main(){ gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: 'uniform float opacidad; uniform vec3 fondo; void main(){ gl_FragColor = vec4(fondo, opacidad); }',
+}));
+velo.renderOrder = 2;
+const sombra = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false, uniforms: { fondo: colorHud },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: `uniform vec3 fondo; varying vec2 vUv;
+    void main(){ float y = (1.0 - vUv.y) * 1920.0; gl_FragColor = vec4(fondo, 0.86 * (1.0 - smoothstep(420.0, 700.0, y))); }`,
+}));
+sombra.renderOrder = 1;
+const destello = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { fuerza: { value: 0 }, color: { value: new THREE.Vector3(1, 1, 0.85) } },
+  vertexShader: 'void main(){ gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: 'uniform float fuerza; uniform vec3 color; void main(){ gl_FragColor = vec4(color * fuerza, 1.0); }',
+}));
+destello.renderOrder = 4;
+hud.add(sombra, velo, capaTexto, destello);
+
+function textoNeon(texto, x, y, color, halo, blurs = [26, 10], nucleo = '#ffffff') {
+  ctx.fillStyle = color;
+  ctx.shadowColor = halo;
+  for (const b of blurs) {
+    ctx.shadowBlur = b;
+    ctx.fillText(texto, x, y);
+  }
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = nucleo;
+  ctx.fillText(texto, x, y);
+}
+
+// ------------------------------------------------------------------ posproceso: brillo, barrido y glitch
+const compositor = new EffectComposer(renderer);
+compositor.addPass(new RenderPass(escena, camara));
+const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 0.6, 0.38, 0.32);
+compositor.addPass(bloom);
+// Barrido (whip pan): desenfoque de movimiento en una dirección mientras la cámara salta de toma
+const barrido = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, fuerza: { value: 0 }, dir: { value: new THREE.Vector2(1, 0) } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float fuerza; uniform vec2 dir; varying vec2 vUv;
+    void main(){
+      if (fuerza <= 0.0) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
+      vec4 c = vec4(0.0);
+      for (int i = 0; i < 17; i++) c += texture2D(tDiffuse, vUv + dir * (float(i) / 16.0 - 0.5) * 0.12 * fuerza);
+      gl_FragColor = c / 17.0;
+    }`,
+});
+compositor.addPass(barrido);
+compositor.addPass(new OutputPass());
+const pasoHud = new RenderPass(hud, camaraHud);
+pasoHud.clear = false;
+compositor.addPass(pasoHud);
+const glitch = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, fuerza: { value: 0 }, semilla: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float fuerza; uniform float semilla; varying vec2 vUv;
+    float h(float x){ return fract(sin(x * 127.1 + semilla * 311.7) * 43758.5453); }
+    void main(){
+      if (fuerza <= 0.0) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
+      vec2 uv = vUv;
+      float banda = floor(uv.y * (14.0 + 50.0 * h(1.0)));
+      if (h(banda + 3.0) < 0.12 + 0.55 * fuerza) uv.x += (h(banda + 7.0) - 0.5) * 0.4 * fuerza;
+      uv += (vec2(h(11.0), h(13.0)) - 0.5) * 0.035 * fuerza;
+      float s = 0.004 + 0.035 * fuerza;
+      vec3 c = vec3(texture2D(tDiffuse, uv + vec2(s, 0.0)).r, texture2D(tDiffuse, uv).g, texture2D(tDiffuse, uv - vec2(s, 0.0)).b);
+      vec2 b = floor(uv * vec2(9.0, 16.0));
+      if (h(b.x * 3.1 + b.y * 7.7) > 1.0 - 0.14 * fuerza) c = c.gbr * 1.7;
+      c *= 1.0 - fuerza * 0.25 * (0.5 + 0.5 * sin(vUv.y * 2600.0));
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+});
+compositor.addPass(glitch);
+
+// ------------------------------------------------------------------ utilidades de tiempo
+function azar(semilla) {
+  let a = semilla >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let x = Math.imul(a ^ (a >>> 15), 1 | a);
+    x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const clamp01 = x => Math.min(1, Math.max(0, x));
+const suave = x => { x = clamp01(x); return x * x * (3 - 2 * x); };
+const salida = x => 1 - Math.pow(1 - clamp01(x), 3);                         // entra rápido y se frena
+const enMedio = x => { x = clamp01(x); return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+const rebote = x => { x = clamp01(x); const c = 1.9; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const grados = g => g * Math.PI / 180;
+function ultimo(lista, t) {                                                   // último tiempo <= t
+  let lo = 0, hi = lista.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (lista[m] <= t) lo = m + 1; else hi = m; }
+  return lo;                                                                  // cuántos tiempos hay <= t
+}
+const ultimoT = (lista, t) => { const i = ultimo(lista, t); return i > 0 ? lista[i - 1] : -99; };
+
+// Textos que flotan sobre la cuadrícula: [toma, texto, x, y, z, tamaño]
+const FLOTANTES = [
+  ['bajo', 'bom · BA', xDePaso(8), TOPE + 2.0, zDeFila(1), 60],
+  ['clap', '2 · 4', xDePaso(8), TOPE + 2.2, zDeFila(2), 64],
+  ['gate', '1/16', xDePaso(8), TOPE + 2.2, zDeFila(4), 64],
+  ['delay', 'IZQ ↔ DER', xDePaso(8), TOPE + 2.4, zDeFila(4), 60],
+  ['arp2', '+1 OCTAVA', xDePaso(8), TOPE + 2.4, zDeFila(5), 60],
+  ['sidechain', 'SIDECHAIN', xDePaso(8), TOPE + 3.0, zDeFila(2), 64],
+];
+// Notas que flotan sobre un carril y cambian con cada acorde (compás): [toma, fila, lista de D, tamaño, paso]
+// (paso = dónde flotan a lo largo del carril; donde mira la cámara de esa toma)
+const NOTAS = [
+  ['acordes', 4, 'acordes', 110, 7.5],
+  ['acordes2', 4, 'notasAcorde', 80, 7.5],
+  ['bajo2', 1, 'notaBajo', 110, 4],
+  ['arp', 5, 'notasAcorde', 80, 7.5],
+];
+// Números que salen sobre los golpes: [toma, capa, textos]
+const NUMEROS = [['kick', 'KICK', ['1', '2', '3', '4']]];
+
+// ------------------------------------------------------------------ datos
+let D = null, P = null, lista = [], tKicks = [], tCajas = [], tDrop = 0, tSide = 0, C0 = 0, C1 = 0, TAPE = 0;
+let tLead = [], LASER = [];
+const COL = {};                                     // colores de la paleta como THREE.Color (lineal)
+const color = new THREE.Color(), BLANCO = new THREE.Color(0xffffff), m4 = new THREE.Matrix4(), esc = new THREE.Vector3();
+const baseBaldosa = new THREE.Color();
+
+// Tomas de cámara (coordenadas del tablero: x = pasos −7.5…7.5, z = carriles 3.25 adelante…−3.25 atrás).
+// p = posición, l = mirada, r = inclinación en grados (ángulo holandés) al empezar y al terminar.
+// corte: 'h' o 'v' = entra con barrido en esa dirección; si no, se funde suave con la anterior.
+const TOMAS = {
+  gancho: { p0: [7, 3.5, 27], p1: [1.5, 3.2, 25.5], l0: [0, 5.6, -6], l1: [0, 5.4, -6], r0: -3, r1: 0 },
+  gancho2: { p0: [1.5, 3.2, 25.5], p1: [-4, 2.8, 24], l0: [0, 5.4, -6], l1: [0, 5.2, -6], r0: 0, r1: 3 },
+  cero: { p0: [-4, 2.8, 24], p1: [-4.6, 2.7, 23], l0: [0, 5.2, -6], l1: [0, 5.0, -6], r0: 3, r1: 3 },
+  kick: { p0: [-8, 2.6, 10], p1: [2, 2.6, 10], l0: [-4.5, 1.2, 3.25], l1: [5.5, 1.2, 3.25], r0: 0, r1: 0, corte: 'h' },
+  bajo: { p0: [11, 3.4, 9.5], p1: [6.5, 3.2, 10], l0: [1.5, 1.0, 1.95], l1: [-2, 1.0, 1.95], r0: -6, r1: -4, corte: 'v' },
+  bajo2: { p0: [6.5, 3.2, 10], p1: [3, 3.0, 10.5], l0: [-2, 1.0, 1.95], l1: [-4.5, 1.0, 1.95], r0: -4, r1: -2, corte: 'v' },
+  respiro1: { orbita: true, a0: -0.9, giro: 1.6, r: 16, y0: 6, y1: 9 },
+  clap: { p0: [12.5, 7.5, 11], p1: [10.5, 6.8, 12], l0: [0, 1.4, 0], l1: [0.5, 1.4, 0], r0: -10, r1: -8, corte: 'h' },
+  acordes: { p0: [-12, 4.5, 2.5], p1: [-9.5, 4.2, 0.5], l0: [2, 1, -1.95], l1: [3, 1, -1.95], r0: 8, r1: 6, corte: 'h' },
+  acordes2: { p0: [-9.5, 4.2, 0.5], p1: [-7, 4.0, -1.0], l0: [3, 1, -1.95], l1: [4, 1, -1.95], r0: 6, r1: 4 },
+  gate: { p0: [-12, 2.4, 0.4], p1: [-3, 2.4, 0.4], l0: [-5, 1.1, -1.95], l1: [6, 1.1, -1.95], r0: 4, r1: 2, corte: 'v' },
+  delay: { p0: [12, 6, 4], p1: [9, 5.5, 2.5], l0: [-2, 1.1, -1.95], l1: [-3, 1.1, -1.95], r0: -6, r1: -4, corte: 'h' },
+  delay2: { p0: [9, 5.5, 2.5], p1: [6, 5.0, 1.5], l0: [-3, 1.1, -1.95], l1: [-4, 1.1, -1.95], r0: -4, r1: -2 },
+  respiro2: { orbita: true, a0: 0.9, giro: -1.4, r: 14, y0: 16, y1: 7 },             // espiral que baja
+  arp: { p0: [12, 5.0, -8.5], p1: [9.5, 5.2, -9.5], l0: [-2.5, 1.0, -3.25], l1: [-3.0, 1.0, -3.25], r0: -6, r1: -6, corte: 'h' },
+  arp2: { p0: [9.5, 5.2, -9.5], p1: [6.5, 5.4, -10], l0: [-3.0, 1.0, -3.25], l1: [-5, 1.0, -3.25], r0: -6, r1: -4 },
+  dato: { p0: [-14, 10, 16], p1: [-9, 11, 18], l0: [1, -1.5, -0.5], l1: [1, -1.5, -0.5], r0: 3, r1: -3 },
+  sidechain: { p0: [0, 20, 15], p1: [0, 16, 13], l0: [0, 0, 0], l1: [0, 0.5, 0], r0: 0, r1: 0, corte: 'v' },
+  sidechain2: { p0: [0, 16, 13], p1: [0, 13, 12], l0: [0, 0.5, 0], l1: [0, 0.5, 0], r0: 0, r1: 0 },
+  break: { p0: [0, 7, 18], p1: [0, 3.2, 13], l0: [0, 1.2, 0], l1: [0, 7, -10], r0: 0, r1: -3 },
+};
+// Drop: la cámara se pone "en el público" frente al escenario y se mueve en un solo recorrido continuo
+// [segundos desde el drop, posición, mirada, inclinación en grados]
+const PASOS_DROP = [
+  [0, [0, 3.6, 14], [0, 6, -8], -3],
+  [1.6, [0, 2.4, 26], [0, 6, -8], 0],
+  [7.0, [-8, 3.2, 23], [0, 5.6, -7], -5],
+  [10.5, [-15, 6.0, 13], [0, 5, -6], -2],
+  [14.0, [12, 6.5, 19], [0, 5.5, -6], 5],
+  [17.0, [3, 13, 24], [0, 5, -7], 0],
+  [21.0, [0, 8, 20], [0, 5.5, -8], 0],
+];
+const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3(), vD = new THREE.Vector3();
+// Devuelve la inclinación (radianes); pos y mira salen por referencia
+function tomaEn(nombre, u, pos, mira) {
+  const k = TOMAS[nombre], e = suave(u);
+  if (k.orbita) {
+    // Vuelta alrededor de todo el secuenciador (en los respiros: espirales que suben o bajan)
+    const a = k.a0 + k.giro * enMedio(u);
+    pos.set(Math.sin(a) * k.r, k.y0 + (k.y1 - k.y0) * e, Math.cos(a) * k.r);
+    mira.set(0, -0.5, 0);
+    return 0;
+  }
+  pos.fromArray(k.p0).lerp(vD.fromArray(k.p1), e);
+  mira.fromArray(k.l0).lerp(vD.fromArray(k.l1), e);
+  return grados(k.r0 + (k.r1 - k.r0) * e);
+}
+const catmull = (p0, p1, p2, p3, u) => 0.5 * ((2 * p1) + (-p0 + p2) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u * u
+  + (-p0 + 3 * p1 - 3 * p2 + p3) * u * u * u);
+function camaraDrop(td, pos, mira) {
+  const K = PASOS_DROP, n = K.length;
+  if (td >= K[n - 1][0]) { pos.fromArray(K[n - 1][1]); mira.fromArray(K[n - 1][2]); return grados(K[n - 1][3]); }
+  let i = 0;
+  while (K[i + 1][0] < td) i++;
+  const a = K[Math.max(i - 1, 0)], b = K[i], c = K[i + 1], d = K[Math.min(i + 2, n - 1)];
+  const u = (td - b[0]) / (c[0] - b[0]);
+  pos.set(...[0, 1, 2].map(j => catmull(a[1][j], b[1][j], c[1][j], d[1][j], u)));
+  mira.set(...[0, 1, 2].map(j => catmull(a[2][j], b[2][j], c[2][j], d[2][j], u)));
+  return grados(catmull(a[3], b[3], c[3], d[3], u));
+}
+
+function rango(nombre) {
+  const s = D.secciones.find(x => x.toma === nombre);
+  return s ? [s.t0, s.t1] : [1e9, 1e9];
+}
+function seccionEn(t) {
+  let i = 0;
+  while (i + 1 < D.secciones.length && D.secciones[i + 1].t0 <= t) i++;
+  return i;
+}
+const hex = c => '#' + c.getHexString();
+const aclarar = (h, k) => hex(new THREE.Color(h).lerp(BLANCO, k));
+
+window.cargar = (d) => {
+  D = d;
+  P = D.paletas[D.paleta];
+  tDrop = rango('drop')[0];
+  tSide = rango('sidechain')[0];
+  [C0, C1] = D.cero;
+  TAPE = D.tape;
+  // Paleta → materiales
+  for (const [capa, h] of Object.entries(P.capas)) COL[capa] = new THREE.Color(h);
+  COL.ROLL = COL.CLAP;
+  COL['PAD LARGO'] = COL.PAD;
+  for (const capa of Object.keys(P.capas)) COL[capa + ' INTRO'] = COL[capa];
+  LASER = P.laseres.map(h => new THREE.Color(h));
+  const fondo0 = new THREE.Color(P.fondo[0]), fondo1 = new THREE.Color(P.fondo[1]);
+  escena.background = fondo0.clone();
+  escena.fog.color = fondo1.clone();
+  cielo.material.uniforms.arriba.value.copy(fondo0);
+  cielo.material.uniforms.abajo.value.copy(fondo1);
+  sol.material.uniforms.c0.value.set(P.sol[0]);
+  sol.material.uniforms.c1.value.set(P.sol[1]);
+  piso.material.uniforms.linea.value.set(P.piso);
+  piso.material.uniforms.fondo.value.copy(fondo1);
+  matFilo.color.set(P.filo);
+  matMontes.color.copy(fondo0).multiplyScalar(0.7);
+  matEstrellas.color.set(P.estrellas);
+  contraluz.color.set(P.piso);
+  hemi.color.set(P.estrellas);
+  hemi.groundColor.copy(fondo1);
+  marco.material.color.set(P.texto);
+  cabezal.material.color.set(P.texto);
+  baseBaldosa.copy(fondo1).lerp(new THREE.Color(P.piso), 0.035).multiplyScalar(1.1);
+  const s = new THREE.Color(P.fondo[0]);
+  colorHud.value.set(...[s.r, s.g, s.b].map(c => c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055));
+  const cl = new THREE.Color(P.clave);
+  destello.material.uniforms.color.value.set(cl.r * 0.5 + 0.5, cl.g * 0.5 + 0.5, cl.b * 0.5 + 0.5);
+
+  // Un bloque por (capa, paso): aparece en cascada cuando su capa entra, justo antes de su primer golpe
+  const porClave = new Map();
+  for (const [t, carril, paso, fuerza, capa] of D.golpes) {
+    const clave = `${capa}-${paso}`;
+    if (!porClave.has(clave)) {
+      const sec = D.secciones.find(s => s.t0 <= t && t < s.t1);
+      // El trance terminado ya está completo en el cuadro 0 (gancho); el resto entra en cascada
+      const aparece = capa === 'ROLL' ? t - 0.06 : capa.endsWith(' INTRO') ? -1 : Math.max(sec.t0 - 0.12, sec.t0 + paso * D.paso * 0.5 - 0.1);
+      porClave.set(clave, { capa, base: capa.replace(' INTRO', ''), carril, paso, fuerza, tiempos: [], aparece });
+    }
+    porClave.get(clave).tiempos.push(t);
+    if (capa.startsWith('KICK')) tKicks.push(t);
+    if (capa.startsWith('CLAP') || capa === 'ROLL') tCajas.push(t);
+  }
+  lista = [...porClave.values()];
+  for (const l of [tKicks, tCajas]) l.sort((a, b) => a - b);
+  tLead = D.lead.map(x => x[0]);
+};
+
+// Momento en que la pieza despega hacia el escenario: en cascada, las de abajo primero
+const despegue = f => tDrop - 0.6 + 0.6 * (0.6 * f.altura + 0.4 * f.orden);
+const VUELO = 0.6;
+const despegueBaldosa = new Float32Array(PASOS * FILAS).fill(1e9);
+
+
+// ------------------------------------------------------------------ dibujar un cuadro
+const pos = new THREE.Vector3(), mira = new THREE.Vector3(), proy = new THREE.Vector3();
+const qTmp = new THREE.Quaternion(), pTmp = new THREE.Vector3();
+function aPantalla(x, y, z) {
+  proy.set(x, y, z).applyMatrix4(tablero.matrixWorld).project(camara);
+  return [(proy.x + 1) / 2 * W, (1 - proy.y) / 2 * H, proy.z < 1];
+}
+// Láser: un haz que sale de o en la dirección (yaw, pitch) con brillo y color
+function haz(i, o, yaw, pitch, brillo, c) {
+  vA.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch));
+  qTmp.setFromUnitVectors(Y_ARRIBA, vA);
+  m4.compose(o, qTmp, esc.set(1, LARGO_HAZ, 1));
+  haces.setMatrixAt(i, m4);
+  brumas.setMatrixAt(i, m4);
+  color.copy(c).lerp(BLANCO, 0.25).multiplyScalar(brillo * 2.4);
+  haces.setColorAt(i, color);
+  color.copy(c).multiplyScalar(brillo * 0.07);
+  brumas.setColorAt(i, color);
+}
+
+window.dibujar = (t) => {
+  if (despegueBaldosa[0] > 1e8) for (const f of PIEZAS) despegueBaldosa[f.baldosa] = Math.min(despegueBaldosa[f.baldosa], despegue(f));
+  const fr = Math.min(D.mapa.length - 1, Math.round(t * D.fps));
+  const st = D.mapa[fr];                        // segundo que se ve (el tape stop lo congela, el glitch lo traba)
+  const enCero = t >= C0 && t < C1;
+  const tt = enCero ? t : st;                   // los textos siguen el tiempo real aunque la imagen se congele
+  const tCae = enCero ? t - C0 - TAPE : -1;     // segundos desde que la cinta se detuvo (luego todo se cae)
+  const is = seccionEn(tt), sec = D.secciones[is];
+  const u = clamp01((st - sec.t0) / (sec.t1 - sec.t0));
+  const latido = Math.exp(-Math.max(0, st - ultimoT(tKicks, st)) * 9);
+  const iCaja = ultimo(tCajas, st), golpeCaja = Math.exp(-Math.max(0, st - (iCaja > 0 ? tCajas[iCaja - 1] : -99)) * 6);
+  const enDrop = st >= tDrop;
+  const pasoActual = ((st % D.compas) / D.paso);
+  const compas = Math.floor(st / D.compas);
+  const [br0, br1] = D.breakdown;
+  const iLead = ultimo(tLead, st);
+  const lead = iLead > 0 ? D.lead[iLead - 1] : null;
+  const brilloLead = lead && st - lead[0] < 1.5 ? Math.exp(-(st - lead[0]) * 5) : 0;
+
+  // Baldosas: más claras en cada tiempo; la columna que suena se prende. Tiemblan al final del break y
+  // sueltan piezas hacia el escenario en el drop.
+  const tiembla = st >= br1 - D.compas && st < tDrop ? Math.pow((st - (br1 - D.compas)) / D.compas, 2) : 0;
+  for (let p = 0, i = 0; p < PASOS; p++) {
+    const enCabezal = Math.max(0, 1 - Math.abs(pasoActual - 0.5 - p) * 1.4);
+    for (let fi = 0; fi < FILAS; fi++, i++) {
+      const j = p * FILAS + fi;
+      const suelta = st >= despegueBaldosa[j] ? Math.exp(-(st - despegueBaldosa[j]) * 5) : 0;   // destello al soltar piezas
+      const sy = 0.08 * tiembla * Math.sin(st * 61 + j * 1.7);
+      pTmp.set(xDePaso(p), sy, zDeFila(fi));
+      m4.compose(pTmp, qTmp.identity(), esc.setScalar(1));
+      baldosas.setMatrixAt(j, m4);
+      color.copy(baseBaldosa).multiplyScalar(p % 4 === 0 ? 1.5 : 1);
+      color.lerp(COL.CLAP, 0.35 * tiembla * (0.5 + 0.5 * Math.sin(st * 40 + j)));
+      color.add(vToColor(COL.KICK, 0.18 * enCabezal)).add(vToColor(COL[D.carriles[fi]], 0.9 * suelta));
+      baldosas.setColorAt(j, color);
+    }
+  }
+  baldosas.instanceMatrix.needsUpdate = baldosas.instanceColor.needsUpdate = true;
+  cabezal.position.x = xDePaso(Math.floor(pasoActual));
+  cabezal.visible = st >= C1 && !enDrop;
+
+  // Bloques
+  let nb = 0, na = 0, nc = 0;
+  const pc = geoChispas.attributes.position.array, cc = geoChispas.attributes.color.array;
+  for (const b of lista) {
+    const ult = ultimoT(b.tiempos, st), edad = st - ult;
+    if (b.capa === 'ROLL' && st > b.tiempos[b.tiempos.length - 1] + 0.3) continue;
+    const intro = b.capa !== b.base;
+    let mudo = 1;
+    if (intro) {
+      // El trance del gancho: armado desde el cuadro 0; cuando la cinta se detiene se cae
+      if (st >= C1) continue;
+      if (tCae > 0) mudo = 1 - salida((tCae - b.paso * 0.015 - b.carril * 0.03) / 0.4);
+    } else {
+      if (st < b.aparece) continue;
+      // Una capa que deja de sonar (en el break) se esconde; vuelve a saltar cuando suena otra vez
+      if (b.capa !== 'ROLL' && edad > D.compas * 1.05) mudo = 1 - salida((edad - D.compas * 1.05) / 0.3);
+    }
+    if (mudo < 0.02) continue;
+    let golpe = edad >= 0 && edad < 2 ? Math.exp(-edad * 11) : 0;
+    const crece = intro ? 1 : rebote((st - b.aparece) / 0.28);
+    // Sidechain: el bajo, el pad y el arpegio se agachan con cada kick (lo mismo que se oye)
+    const agacha = (intro || st >= tSide) && ['BAJO', 'PAD', 'PAD LARGO', 'ARP'].includes(b.base) ? 1 - 0.35 * latido : 1;
+    const alto = Math.max(0.02, CAPAS[b.capa].alto * b.fuerza * crece * mudo * agacha * (1 + 0.18 * golpe));
+    const xb = xDePaso(b.paso);
+    pTmp.set(xb, TOPE + alto / 2, zDeFila(b.carril));
+    m4.compose(pTmp, qTmp.identity(), esc.set(1 + 0.08 * golpe, alto, 1 + 0.08 * golpe));
+    bloques.setMatrixAt(nb, m4);
+    color.copy(COL[b.capa]).lerp(BLANCO, 0.35 * golpe).multiplyScalar(0.7 + 0.55 * golpe);
+    bloques.setColorAt(nb++, color);
+
+    // Anillo y chispas de cada golpe reciente
+    if (edad >= 0 && edad < 0.55 && mudo > 0.5 && na < MAX_ANILLOS) {
+      const s = 1 + edad * 2.6;
+      pTmp.set(xb, TOPE + 0.015, zDeFila(b.carril));
+      m4.compose(pTmp, qTmp.identity(), esc.set(s, 1, s));
+      anillos.setMatrixAt(na, m4);
+      color.copy(COL[b.capa]).lerp(BLANCO, 0.4).multiplyScalar(Math.pow(1 - edad / 0.55, 2) * 1.3);
+      anillos.setColorAt(na++, color);
+    }
+    if (edad >= 0 && edad < 0.75 && mudo > 0.5) {
+      const n = b.base === 'HATS' || b.base === 'PAD' ? 2 : b.base === 'BAJO' || b.base === 'ARP' ? 4 : 10;
+      const r = azar(Math.round(ult * 1000) * 31 + b.paso * 7 + b.carril);
+      for (let k = 0; k < n && nc < MAX_CHISPAS; k++, nc++) {
+        const v = 2.2 + r() * 2.8, a = r() * Math.PI * 2, lat = 1.2 + r() * 1.6, vida = 0.45 + r() * 0.3;
+        if (edad > vida) { nc--; continue; }
+        const vx = Math.cos(a) * lat, vy = v + 0.5, vz = Math.sin(a) * lat;
+        const fre = 1 - edad * 0.9;                                    // freno de aire
+        pc[nc * 3] = xb + vx * edad * fre;
+        pc[nc * 3 + 1] = TOPE + alto + vy * edad * fre - 4.5 * edad * edad;
+        pc[nc * 3 + 2] = zDeFila(b.carril) + vz * edad * fre;
+        const vivo = Math.pow(1 - edad / vida, 1.5);
+        color.copy(COL[b.capa]).lerp(BLANCO, Math.max(0, 1 - edad * 5)).multiplyScalar(vivo * 1.4);
+        cc[nc * 3] = color.r; cc[nc * 3 + 1] = color.g; cc[nc * 3 + 2] = color.b;
+      }
+    }
+  }
+  bloques.count = nb;
+  anillos.count = na;
+  bloques.instanceMatrix.needsUpdate = anillos.instanceMatrix.needsUpdate = true;
+  if (bloques.instanceColor) bloques.instanceColor.needsUpdate = true;
+  if (anillos.instanceColor) anillos.instanceColor.needsUpdate = true;
+
+  geoChispas.setDrawRange(0, nc);
+  geoChispas.attributes.position.needsUpdate = geoChispas.attributes.color.needsUpdate = true;
+
+  // Cámara
+  let roll = 0, blur = 0;
+  const toma = D.secciones[seccionEn(st)].toma;
+  if (!enDrop) {
+    const isv = seccionEn(st), uv = clamp01((st - D.secciones[isv].t0) / (D.secciones[isv].t1 - D.secciones[isv].t0));
+    roll = tomaEn(toma, uv, pos, mira);
+    const dt = st - D.secciones[isv].t0, k = TOMAS[toma];
+    if (isv > 0) {
+      if (k.corte && dt < 0.32) {
+        // Barrido: salta rápido de la toma anterior a esta con desenfoque de movimiento
+        const rPrev = tomaEn(D.secciones[isv - 1].toma, 1, vA, vB);
+        const e = enMedio(dt / 0.32);
+        pos.copy(vA.lerp(pos, e));
+        mira.copy(vB.lerp(mira, e));
+        roll = rPrev + (roll - rPrev) * e;
+        blur = Math.sin(Math.PI * dt / 0.32);
+        barrido.uniforms.dir.value.set(k.corte === 'h' ? 1 : 0, k.corte === 'v' ? 0.5625 : 0);
+      } else if (!k.corte && dt < 0.55) {
+        const rPrev = tomaEn(D.secciones[isv - 1].toma, 1, vA, vB);
+        const e = suave(dt / 0.55);
+        pos.copy(vA.lerp(pos, e));
+        mira.copy(vB.lerp(mira, e));
+        roll = rPrev + (roll - rPrev) * e;
+      }
+    }
+    if (toma === 'break') {
+      pos.x += Math.sin(st * 53) * 0.14 * tiembla;
+      pos.y += Math.sin(st * 71) * 0.14 * tiembla;
+    }
+    // Sidechain: la cámara "respira" con el kick
+    if (['sidechain', 'sidechain2', 'gancho', 'gancho2'].includes(toma)) pos.lerp(mira, 0.03 * latido);
+  } else {
+    // Clímax: la cámara se pone en el público frente al escenario y recorre la pista
+    const td = st - tDrop;
+    const rPrev = tomaEn('break', 1, vA, vB);
+    const rD = camaraDrop(td, vC, vD);
+    const e = suave(td / 0.9);
+    pos.copy(vA.lerp(vC, e));
+    mira.copy(vB.lerp(vD, e));
+    pos.lerp(mira, 0.025 * latido);
+    roll = rPrev * (1 - e) + rD * e;
+  }
+  camara.position.copy(pos);
+  camara.up.set(0, 1, 0);
+  camara.lookAt(mira);
+  camara.rotateZ(roll);
+  camara.updateMatrixWorld();
+  tablero.updateMatrixWorld();
+  barrido.uniforms.fuerza.value = blur;
+
+  // Escenario: armado en el gancho, se cae a las baldosas tras el tape stop y vuelve a armarse en el drop
+  let np = 0;
+  const ik = ultimo(tKicks, st), edadKick = ik > 0 ? st - tKicks[ik - 1] : 9;
+  if (st < C1 || st >= tDrop - 0.8) {
+    for (const f of PIEZAS) {
+      let k;                                      // 0 = en su baldosa, 1 = en el escenario
+      if (st < C1) k = tCae > 0 ? 1 - clamp01((tCae - f.orden * 0.35) / VUELO) : 1;
+      else k = clamp01((st - despegue(f)) / VUELO);
+      if (k <= 0) continue;
+      let rz = f.rz;
+      if (f.tipo === 'aro') {
+        const a = f.k / ARO.n * Math.PI * 2 + 0.25 * st;
+        f.destino.set(Math.cos(a) * ARO.r, ARO.y + Math.sin(a) * ARO.r, ARO.z);
+        rz = a + Math.PI / 2;
+      }
+      const e = enMedio(k);
+      pTmp.copy(f.origen).lerp(f.destino, e);
+      pTmp.y += Math.sin(Math.PI * k) * 3;                                                   // vuela en arco
+      qTmp.setFromAxisAngle(EJE_Z, rz * e);
+      const llega = st >= C1 && k >= 1 ? Math.exp(-(st - despegue(f) - VUELO) * 9) : 0;      // destello al encajar
+      m4.compose(pTmp, qTmp, esc.setScalar(1 + 0.25 * llega));
+      piezas.setMatrixAt(np, m4);
+      // Luz: las torres suben una ola con cada kick, la armadura destella con el kick, el aro corre colores con
+      // el lead
+      let luz = 0.12, c = COL[D.carriles[f.fila]];
+      if (f.tipo === 'torre') {
+        luz += 1.1 * Math.exp(-Math.pow((f.k - edadKick * 45) / 2.2, 2)) * Math.max(0, 1 - edadKick / 0.5);
+        c = LASER[(Math.floor(compas / 2)) % LASER.length];
+      } else if (f.tipo === 'armadura') {
+        luz += 0.5 * latido + 0.3 * golpeCaja;
+        c = LASER[(Math.floor(compas / 2) + 1) % LASER.length];
+      } else {
+        c = LASER[(f.k + Math.floor(st * 6)) % LASER.length];
+        luz += 0.35 + 0.9 * brilloLead;
+      }
+      color.copy(c).multiplyScalar(luz * (1 - 0.6 * (1 - e)) + 0.9 * llega);
+      piezas.setColorAt(np++, color);
+    }
+  }
+  piezas.count = np;
+  piezas.instanceMatrix.needsUpdate = true;
+  if (piezas.instanceColor) piezas.instanceColor.needsUpdate = true;
+
+  // Láseres: salen del escenario en el gancho y en el drop; en el break, unos pocos suben al cielo desde atrás
+  // del tablero y se van encendiendo con la subida
+  let nh = 0;
+  const fuerzaLaser = st < C1 ? (tCae > 0 ? 0 : 1) : enDrop ? clamp01((st - tDrop) / 0.6) : 0;
+  if (fuerzaLaser > 0) {
+    const modo = Math.floor(compas / 2) % 3;
+    const fase = 2 * Math.PI * st / (2 * D.compas);
+    const grupo = lead ? lead[1] % EMISORES.length : -1;
+    EMISORES.forEach((em, ie) => {
+      for (let j = 0; j < em.haz; j++) {
+        const c = j - (em.haz - 1) / 2;
+        let yaw, pitch;
+        // yaw: 0 = hacia el público; ±π/2 = a los lados. Nunca derecho a la cámara: los haces se ven de lado
+        const lado = (ie + j) % 2 ? 1 : -1;
+        if (em.tipo === 'aro') {                                                           // abanico al cielo
+          yaw = c * 0.4 + 0.3 * Math.sin(fase);
+          pitch = 0.7 + 0.5 * (0.5 + 0.5 * Math.sin(fase * 0.5 + j));
+        } else if (modo === 0) {                                                           // barren juntos
+          yaw = lado * (0.7 + 0.15 * c) + 0.5 * Math.sin(fase + ie * 0.35);
+          pitch = 0.08 + 0.18 * Math.sin(fase * 2);
+        } else if (modo === 1) {                                                           // tijeras
+          yaw = lado * (0.6 + 0.45 * Math.sin(fase + ie)) + 0.1 * c;
+          pitch = 0.12 + 0.08 * Math.cos(fase);
+        } else {                                                                           // abanico que sube
+          yaw = c * 0.35 + lado * 0.5 + 0.15 * Math.sin(fase + ie);
+          pitch = 0.35 + 0.5 * (0.5 + 0.5 * Math.sin(fase + ie * 0.8));
+        }
+        if (em.tipo === 'torre') { yaw = -em.i * (0.5 + 0.4 * Math.sin(fase + j)); pitch = 0.25 + 0.15 * j; }   // cruzan al centro
+        const flash = brilloLead * (ie === grupo || em.tipo === 'aro' ? 1 : 0.2);
+        haz(nh++, em.p, yaw, pitch, fuerzaLaser * (0.2 + 0.22 * latido + 0.55 * flash), LASER[(ie + Math.floor(compas / 2)) % LASER.length]);
+      }
+    });
+  }
+  if (st >= br0 && st < tDrop) {
+    const ub = (st - br0) / (br1 - br0);
+    pTmp.set(0, 0.2, -4.6);
+    for (let j = 0; j < HACES_BREAK; j++) {
+      const yaw = (j - 2.5) * 0.3 + 0.2 * Math.sin(st * 0.8 + j), pitch = 0.95 + 0.25 * Math.sin(st * 0.6 + j * 1.3);
+      haz(nh++, pTmp, yaw, pitch, (0.05 + 0.38 * ub * ub) * (1 + 0.6 * brilloLead), LASER[j % LASER.length]);
+    }
+  }
+  haces.count = brumas.count = nh;
+  haces.instanceMatrix.needsUpdate = brumas.instanceMatrix.needsUpdate = true;
+  if (haces.instanceColor) haces.instanceColor.needsUpdate = brumas.instanceColor.needsUpdate = true;
+
+
+  sol.material.uniforms.latido.value = latido;
+  sol.scale.setScalar(1 + 0.015 * latido);
+  piso.material.uniforms.avance.value = st * (D.bpm / 60) * 2.5;
+  piso.material.uniforms.latido.value = latido;
+  bloom.strength = 0.5 + 0.1 * latido + (enDrop || st < C1 ? 0.05 : 0) + (toma === 'break' ? 0.15 * u : 0);
+  destello.material.uniforms.fuerza.value = t >= tDrop ? 0.8 * Math.exp(-(t - tDrop) * 7) : 0;
+
+  // ---------------------------------------------------------------- capa 2D
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+  const cierre = t >= D.cierre ? clamp01((t - D.cierre) / 0.25) : 0;
+  velo.material.uniforms.opacidad.value = cierre * 0.88;
+  const A = P.texto, B = P.clave, Bn = aclarar(P.clave, 0.45);
+
+  if (cierre < 1) {
+    ctx.globalAlpha = 1 - cierre;
+    // Barra de transporte
+    const y0 = 196, alto = 64;
+    ctx.strokeStyle = A + '8c';
+    ctx.lineWidth = 2;
+    ctx.fillStyle = A + '0d';
+    ctx.beginPath();
+    ctx.roundRect(48, y0, W - 96, alto, 32);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = B;
+    ctx.shadowColor = B;
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.moveTo(84, y0 + 18); ctx.lineTo(108, y0 + 32); ctx.lineTo(84, y0 + 46);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 34px Futura';
+    textoNeon(String(D.bpm), 128, y0 + 33, A, A, [10]);
+    const anchoBpm = ctx.measureText(String(D.bpm)).width;
+    ctx.font = '600 18px "Avenir Next"';
+    ctx.fillStyle = aclarar(A, 0.5);
+    ctx.fillText('BPM', 136 + anchoBpm, y0 + 37);
+    ctx.font = 'bold 30px Menlo';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('4/4', 240, y0 + 33);
+    const tiempo = Math.floor((st % D.compas) / D.beat) + 1;
+    const semi = Math.floor((st % D.beat) / D.paso) + 1;
+    ctx.fillText(`${String(compas + 1).padStart(3, '0')}.${tiempo}.${semi}`, 330, y0 + 33);
+    // Los 16 pasos en chiquito: los del kick marcados
+    for (let i = 0; i < 16; i++) {
+      const on = i === Math.floor(pasoActual), dem = D.marcas.includes(i);
+      ctx.fillStyle = on ? '#ffffff' : dem ? B : A + '59';
+      ctx.shadowColor = B;
+      ctx.shadowBlur = on ? 16 : 0;
+      ctx.beginPath();
+      ctx.arc(552 + i * 16, y0 + 32, on ? 7 : dem ? 5.5 : 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 22px Futura';
+    ctx.letterSpacing = '4px';
+    textoNeon('NEON KEYS', W - 82, y0 + 33, B, B, [10]);
+    ctx.letterSpacing = '0px';
+
+    // Subtítulo palabra por palabra (la palabra clave en el color de acento)
+    // Máximo dos renglones: si no cabe, la letra se achica (un tercer renglón caería sobre el tablero)
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    let lineas, espacio, interlineado;
+    for (const tam of [72, 64, 58]) {
+      ctx.font = `bold ${tam}px Futura`;
+      espacio = ctx.measureText(' ').width;
+      interlineado = tam * 1.25;
+      lineas = [[]];
+      let ancho = 0;
+      for (const p of sec.palabras) {
+        const w = ctx.measureText(p.txt).width;
+        if (ancho + w > 960 && lineas[lineas.length - 1].length) { lineas.push([]); ancho = 0; }
+        lineas[lineas.length - 1].push({ ...p, w });
+        ancho += w + espacio;
+      }
+      if (lineas.length <= 2) break;
+    }
+    const salidaTexto = 1 - clamp01((tt - (sec.t1 - 0.12)) / 0.12);
+    lineas.forEach((ls, li) => {
+      const total = ls.reduce((a, p) => a + p.w, 0) + espacio * (ls.length - 1);
+      let x = (W - total) / 2;
+      const y = 370 + li * interlineado;
+      for (const p of ls) {
+        const k = salida((tt - p.t) / 0.18);
+        if (k > 0) {
+          ctx.save();
+          ctx.globalAlpha = (1 - cierre) * k * salidaTexto;
+          ctx.translate(x + p.w / 2, y + 22 * (1 - k));
+          ctx.scale(0.9 + 0.1 * k, 0.9 + 0.1 * k);
+          if (p.clave) textoNeon(p.txt, -p.w / 2, 0, B, B, [30, 12], Bn);
+          else textoNeon(p.txt, -p.w / 2, 0, A, A, [22, 8]);
+          ctx.restore();
+        }
+        x += p.w + espacio;
+      }
+    });
+
+    // Etiquetas de los carriles (no en el drop)
+    if (st >= C1 && st < tDrop - 0.6) {
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const foco = FOCO[sec.toma] || [];
+      D.carriles.forEach((capa, fi) => {
+        const resalta = foco.includes(capa);
+        if (!resalta && !(st >= D.entrada[capa] - 0.25)) return;
+        let sx = -1, sy = 0;
+        for (let x = xDePaso(0) - 1.6; x < xDePaso(PASOS - 1); x += 0.25) {
+          const [px, py, delante] = aPantalla(x, TOPE, zDeFila(fi));
+          if (delante && px >= 56 && px < W - 200 && py > 640 && py < 1580) { sx = px; sy = py; break; }
+        }
+        if (sx < 0) return;
+        ctx.font = `bold ${resalta ? 32 : 26}px Futura`;
+        const ancho = ctx.measureText(capa).width;
+        ctx.fillStyle = hex(new THREE.Color(P.fondo[0])) + 'b8';
+        ctx.beginPath();
+        ctx.roundRect(sx - 14, sy - 24, ancho + 28, 48, 24);
+        ctx.fill();
+        if (resalta) textoNeon(capa, sx, sy + 1, B, B, [16], Bn);
+        else { ctx.fillStyle = 'rgba(240,255,235,0.9)'; ctx.fillText(capa, sx, sy + 1); }
+      });
+    }
+
+    // Textos flotantes y números
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const [toma, texto, x, y, z, tam] of FLOTANTES) {
+      const [f0, f1] = rango(toma);
+      const k = salida((st - f0 - 0.85) / 0.25) * (1 - clamp01((st - f1 + 0.15) / 0.2));
+      if (k <= 0) continue;
+      const [sx, sy] = aPantalla(x, y, z);
+      ctx.globalAlpha = k * (1 - cierre);
+      ctx.font = `bold ${Math.round(tam * (0.8 + 0.2 * k))}px Futura`;
+      textoNeon(texto, sx, sy, A, A, [24, 10]);
+    }
+    for (const [toma, capa, numeros] of NUMEROS) {
+      const [n0, n1] = rango(toma);
+      lista.filter(b => b.capa === capa).sort((a, b) => a.paso - b.paso).forEach((b, i) => {
+        const tg = b.tiempos.find(x => x >= n0) ?? 99;
+        const kk = salida((st - tg) / 0.2) * (1 - clamp01((st - n1 + 0.15) / 0.2));
+        if (kk <= 0) return;
+        const [sx, sy] = aPantalla(xDePaso(b.paso), TOPE + CAPAS[capa].alto + 0.95, zDeFila(b.carril));
+        ctx.globalAlpha = kk * (1 - cierre);
+        ctx.font = `bold ${Math.round(110 * (0.7 + 0.3 * kk))}px Futura`;
+        textoNeon(numeros[i], sx, sy, A, A, [30, 12]);
+      });
+    }
+    // Las notas: el acorde (o la nota del bajo) que suena flota sobre su carril y cambia en cada compás
+    for (const [toma, fila, clave, tam, paso] of NOTAS) {
+      const [q0, q1] = rango(toma);
+      if (st >= q0 && st < q1) {
+        const dt = (st - q0) % D.compas;
+        const k = salida(dt / 0.2) * (1 - clamp01((st - q1 + 0.15) / 0.2));
+        const [sx, sy] = aPantalla(xDePaso(paso), TOPE + 2.6, zDeFila(fila));
+        ctx.globalAlpha = k * (1 - cierre);
+        ctx.font = `bold ${Math.round(tam * (0.8 + 0.2 * k))}px Futura`;
+        textoNeon(D[clave][compas % 4], sx, sy, B, B, [30, 12], Bn);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Cierre: monograma NK (la marca, en cian y magenta) + llamada a seguir
+  if (cierre > 0) {
+    const k = salida((t - D.cierre) / 0.45);
+    ctx.globalAlpha = cierre;
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.round(300 * (0.85 + 0.15 * k))}px Futura`;
+    ctx.textAlign = 'right';
+    textoNeon('N', W / 2 + 8, 860, '#00f0ff', '#00f0ff', [60, 26]);
+    ctx.textAlign = 'left';
+    textoNeon('K', W / 2 - 8, 860, '#ff32d2', '#ff32d2', [60, 26]);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 40px Futura';
+    ctx.letterSpacing = '10px';
+    textoNeon('NEON KEYS', W / 2, 1060, '#ff32d2', '#ff32d2', [18]);
+    ctx.letterSpacing = '0px';
+    const k2 = salida((t - D.cierre - 0.3) / 0.3);
+    ctx.globalAlpha = cierre * k2;
+    ctx.font = '600 56px "Avenir Next"';
+    textoNeon(D.cierreTexto, W / 2, 1170 + 16 * (1 - k2), A, A, [18, 8]);
+    ctx.globalAlpha = 1;
+  }
+  texHud.needsUpdate = true;
+
+  // Glitch al final del drop
+  const [gl0, gl1] = D.glitch;
+  glitch.uniforms.fuerza.value = t >= gl0 && t < gl1 ? 0.35 + 0.65 * (t - gl0) / (gl1 - gl0) : 0;
+  // Tape stop: un jalón de glitch justo cuando la cinta se detiene
+  if (tCae > -0.1 && tCae < 0.4) glitch.uniforms.fuerza.value = 0.55 * (1 - (tCae + 0.1) / 0.5);
+  glitch.uniforms.semilla.value = fr;
+
+  renderer.clear();
+  compositor.render();
+};
+const vColorTmp = new THREE.Color();
+function vToColor(c, k) { return vColorTmp.copy(c).multiplyScalar(k); }
+window.listo = true;
+</script>
+</body>
+</html>

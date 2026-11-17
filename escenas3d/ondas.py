@@ -8,7 +8,7 @@ un fondo ambiental y, al final, el chirp otra vez "como lo escuchó LIGO".
 
 Uso:
     .venv/bin/python escenas3d/ondas.py          # → out/.tmp/ondas.json + out/.tmp/ondas.wav
-    cd escenas3d && node grabar.js escenas/ondas.html ../out/pruebas/dato-ondas-gravitacionales-prueba.mp4 \\
+    cd escenas3d && node grabar.js escenas/ondas.html ../out/pruebas/datos/dato-ondas-gravitacionales-prueba.mp4 \\
         --datos out/.tmp/ondas.json --audio out/.tmp/ondas.wav
 """
 

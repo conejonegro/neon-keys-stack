@@ -414,3 +414,228 @@ para leerse, justo la queja del video anterior. Render: ~3 min para 15 s en esta
 Se usa con `--describe false` y sin `publish`, para que nada salga a internet. Las imágenes de los carteles tienen
 derechos: esta pieza no se monetiza.
 
+## ADR-022 · Formato "beat explicado": secuenciador 3D que se arma capa por capa (`escenas3d/techno.py`)
+
+**Contexto.** El dueño vio un reel de @beatmakerhacks que explica cómo hacer que la batería de techno "ruede" con un
+secuenciador 3D de bloques naranjas, y pidió uno así para Neon Keys (~20 s, él pone la voz en TikTok).
+
+**Decisión.** Se hizo con lo que ya teníamos (Three.js + `grabar.js`) y con guion, paleta y cámara propios: 16 pasos
+× 6 carriles (KICK, RUMBLE, CLAP, STAB, OPEN HAT, HATS) sobre el sol retro y el piso synthwave; graves en magenta,
+agudos en cian, clap morado y stab amarillo (acentos de MOTION.md). Una sola tabla en `techno.py` (`PATRONES` +
+`SECCIONES`, una sección por idea y por compás a 132 BPM) da los golpes del audio **y** de la imagen, los textos
+palabra por palabra y el guion de la voz con sus segundos. Toda la batería es síntesis (kick con caída de tono,
+rumble con reverb + sidechain, clap, hats, stab de Fa menor con eco ping-pong), con el pico a −6 dB para dejar
+espacio a la voz. El texto y las etiquetas se dibujan en un canvas 2D en modo *screen*; una sombra arriba asegura
+que se lean. Sol, montañas y piso van hundidos en la dirección de las tomas para quedar detrás de la cuadrícula.
+En el drop la cuadrícula se enrolla en un cilindro (doblez por baldosa en `colocar()`) que gira al tempo.
+
+**Consecuencias.** Para otro tema (house, trap, otra técnica) basta cambiar `PATRONES`, `SECCIONES` y las tomas de
+`TOMAS` en la escena. Prefijo `beat-` en `VIDEO_TYPES` (tipo "beats" en la web). Dos versiones (`--version`): `corto`
+(prueba de ~22 s) y `largo` (1:10, para monetizar). En la larga el sidechain y el swing entran cuando se explican,
+para que se oiga la diferencia; hay un antes/después (todo menos el kick se hunde y vuelve), una subida con redoble
+de clap y silencio antes del drop, y el drop dura 6 compases (clímax al 78 %).
+
+
+## ADR-023 · Beat explicado #3: reguetón con paleta, cámara y final propios (`escenas3d/reggaeton.py`)
+
+**Contexto.** Techno y trap juntos pasaron 20k vistas y trajeron ~800 de los primeros 1,000 seguidores. Para el
+tercero (reguetón, explicando el dembow) el dueño pidió que no se viera igual: otra paleta (verdes y amarillos,
+aunque se salga del cian/magenta), otros movimientos de cámara y un final 3D que se arme como la rueda del techno
+(la bocina del trap estaba bien, pero la rueda gustó más). También pidió no poner un dato histórico largo al
+inicio, porque el del 808 dejó mucho rato sin que pasara nada.
+
+**Decisión.** Se reusa la forma de `trap.py` (PATRONES + SECCIONES → golpes, audio, textos y guion) a 95 BPM, con
+carriles KICK · CAJA · BAJO · TIMBAL · ACORDES · SHAKER. Abre con un reguetón cuadrado (caja en 2 y 4) que se frena
+con un rayón de disco; el dato ("nació en Jamaica, 1990") va a la mitad, con todo sonando. La paleta va en el JSON
+(`--paleta lima|tropical|verde-morado`; el dueño eligió **lima ácido**) y la escena (`escenas/reggaeton.html`)
+la lee en vez de usar colores fijos; el cierre NK se queda en cian/magenta porque es la marca. Esta serie rompe a
+propósito "cámara casi quieta" de MOTION.md: las tomas tienen inclinación (ángulo holandés), una toma cenital con
+corchetes 3-3-2, travellings a ras, cortes con barrido (desenfoque de movimiento en un ShaderPass antes del texto)
+y un balanceo con cada caja. En el drop, 560 facetas salen de las baldosas, vuelan en arco y arman una bola disco
+de espejo (reflejos de un cuarto con focos de la paleta, vía PMREM), que gira al tempo, da un jalón con cada caja,
+lanza rayos que se prenden por turnos y suelta ondas con el kick.
+
+**Consecuencias.** Cada video de la serie lleva su propio clímax visual y puede tener su propia paleta. El hueco
+del kick se oye y se ve (los bloques se agachan). `grabar.js --preview` no aguanta varias instancias en paralelo
+(chocan); las vistas previas se sacan una por una.
+
+
+## ADR-024 · Batería por niveles estilo Guitar Hero con una canción famosa (`escenas3d/punk.py`)
+
+**Contexto.** El reguetón casi no funcionó (el dembow quedó suave, "de playa"). El canal tiene ~1,000 seguidores y
+necesita 10,000 para monetizar, así que por ahora se buscan seguidores, vistas y likes. El dueño pidió un tutorial de
+batería pop punk con carriles que caen (Guitar Hero / Rock Band) y una canción famosa recreada por nosotros: eligió
+*The Kids Aren't Alright* (The Offspring). El guion por niveles lo armó con ChatGPT a partir de nuestra propuesta.
+
+**Decisión.** Se reusa la forma de los beats (una tabla `PATRONES` + `SECCIONES` → golpes, audio y textos), pero cada
+sección lleva su propio tempo: reto a 198 BPM con toda la banda → frenón de cinta → niveles a 130 BPM con click
+(bombo + tarola, + hi-hat, el redoble repartido tarola → tom → piso) → 150 y 172 BPM → banda completa (riff del
+inicio y coro) → cierre con el ritmo de toms del inicio y un golpe final. La batería es transcripción propia (patrones
+de 16 semicorcheas escritos como tablatura); los tiempos de cada compás se calculan en `COMPASES`. Sonido: kit
+**Standard** del soundfont (el dueño lo prefirió al Power); bajo "Fingered Bass" del soundfont; guitarra doblada en
+dos tomas con pequeños desfases: las notas apagadas con la palma son la "Palm Muted Guitar" del soundfont y las
+abiertas son cuerdas Karplus-Strong, las dos por un ampli hecho con código (dos etapas de distorsión y caja que corta
+arriba de ~4 kHz, sin el chirrido de 2.5–6 kHz que sonaba a MIDI). Cada instrumento se fija a un nivel RMS medido en
+la parte de la banda; sin banda la batería sube 5 dB, y el tom de piso no pasa por el refuerzo de graves del bombo
+(saturaba). La escena (`escenas/punk.html`) es una pista 3D que sale del sol retro, con 5 carriles de colores
+(tarola magenta, hi-hat amarillo, tom cian, piso verde, platillo naranja) y el bombo como barra morada que la cruza;
+las gemas viven en un grupo que avanza con el tiempo (z = −t·V), así el tempo variable sale solo. Pads con onda y
+chispas en cada golpe; contador 1·2·3·4, BPM, nombres de carriles y combo en el canvas 2D.
+
+**Consecuencias.** Es un cover: la grabación es nuestra pero la composición tiene dueño, así que sirve para crecer y
+**no** para Creator Rewards. Otra canción = otros `PATRONES`, `SECCIONES`, acordes y riff. La línea de golpe queda en
+y≈1475 para respetar la zona segura (nada importante bajo y=1600).
+
+## ADR-025 · Voz en off: ElevenLabs en un solo audio, guion sin segundos
+
+**Contexto.** Los guiones de voz (`out/pruebas/*-guion.txt`) llevaban el segundo en que empieza cada frase. El
+guion lo escribe otra IA (ChatGPT) y la voz la genera el dueño con una IA de voz; los segundos no le sirven a
+ninguna de las dos, porque la voz sale con su propio ritmo.
+
+**Decisión.** La voz se hace en **ElevenLabs**, con todo el guion en **un solo audio**. Al pasarle el guion a la
+otra IA se le pide eso y **no** se le piden tiempos: solo las frases en orden, una por renglón, con la sección a la
+que pertenece cada una. El corte y la sincronización los hacemos aquí: `escenas3d/techno_voz.py` corta el audio por
+sus silencios, junta los pedazos en frases (`PEDAZOS`), pone cada frase al inicio de su sección, baja la música
+mientras se habla y mueve los subtítulos al ritmo de la voz.
+
+**Consecuencias.** Los guiones que se pasan a la otra IA van sin columna de segundos (los tiempos de las secciones
+solo se dan como referencia de cuánto dura cada parte). Si una frase no cabe en su sección, `techno_voz.py` la
+acelera un poco; si sobra mucho texto, se recorta el guion. Para un formato nuevo (por ejemplo `punk.py`) hay que
+agregar su entrada en `PEDAZOS` y que su escena lea los subtítulos de la voz.
+
+## ADR-026 · Surge XT con DawDreamer para sonidos electrónicos (en prueba)
+
+**Contexto.** En la batería por niveles (ADR-024) la guitarra distorsionada y los instrumentos del soundfont sonaban
+"a MIDI". Se propuso pasar la serie a electrónica (prueba: *Firestarter*, The Prodigy) y probar un sinte de estudio en
+lugar de la síntesis hecha a mano.
+
+**Decisión.** **Surge XT 1.3.4** (gratis, GPL) en `plugins/surge-xt/` (solo los `.vst3` del zip "pluginsonly", sin
+instalar nada en el sistema) y **DawDreamer 0.9.0** (rueda ya armada para Mac Intel) en un entorno aparte,
+`.venv-synth` (Python 3.12, creado con `.venv/bin/uv venv --python 3.12 .venv-synth` + `uv pip install dawdreamer
+numpy`). El zip no trae los presets de fábrica: se bajan los `.fxp` que hagan falta del repositorio de Surge
+(`resources/data/patches_factory/`) a `plugins/surge-xt/patches/`. DawDreamer no lee esos `.fxp`, así que
+`cargar_preset()` (en `escenas3d/surge.py`, junto con `tocar()`) mete el parche dentro del estado del plugin (XML de JUCE con su
+base64 propio). La batería se queda con nuestra síntesis; Surge toca riff y bajo.
+
+**Consecuencias.** Los scripts que usan Surge corren con `.venv-synth/bin/python`. Pendiente de que el dueño compare
+las pruebas (`out/pruebas/firestarter-*-prueba.wav`) antes de adoptarlo en más formatos.
+
+## ADR-027 · Beat explicado #4: psytrance con respiros sin voz y túnel en el drop (`escenas3d/psytrance.py`)
+
+**Contexto.** Recrear canciones completas (*The Kids Aren't Alright*, *Firestarter*, *Sandstorm*) no sonaba tan
+limpio como los beats hechos desde cero. El dueño pidió volver a la serie de beats con algo intenso y "bien
+ponchado": psytrance. Un usuario comentó en el video de techno que la voz no dejaba escuchar la música.
+
+**Decisión.** Misma forma que `reggaeton.py` (PATRONES + SECCIONES → golpes, audio, textos y guion) a 145 BPM en
+Fa♯ menor, con carriles KICK · BAJO · CLAP · OPEN HAT · HATS · ACID. Lo que define al género se explica primero: el
+kick corto que se corta antes de la siguiente semicorchea y el **bajo rodante** en los huecos (K-B-B-B, "bom,
+ta-ta-ta"). Abre con un psytrance embarrado (kick largo y bajo encima) que se apaga cerrando el filtro. Hay
+**secciones sin texto** (respiros de 2 a 4 compases, y medio drop) donde solo suena la música y la cámara gira en
+espiral; `techno_voz.py` pone cada frase en su sección por nombre (`LUGAR_FRASE`) y se salta los respiros. El acid
+sale de Surge XT (ADR-026), así que el script corre en `.venv-synth`. Mezcla a −16.8 LUFS antes de la voz, con el
+saturador apenas tocado (la primera prueba quedó aplastada a −6 LUFS). Paleta ultravioleta + verde tóxico. La cámara
+se mece despacio desde que entra el acid (hipnótico, en vez del ladeo con la caja del reguetón). Clímax: 560 piezas
+salen de las baldosas y arman 28 anillos torcidos en espiral que giran en sentidos contrarios; la cámara se mete y
+vuela por dentro (los anillos que quedan atrás pasan al fondo: túnel sin fin), cada kick manda una onda de luz por
+el túnel y cada clap lo hace girar un jalón.
+
+**Consecuencias.** El drop cae al 75 % (59.6 s de 79.8 s). Para dejar respirar la música en otros beats basta con
+poner secciones de texto vacío y su entrada en `LUGAR_FRASE`.
+
+## ADR-028 · Tributo a Zelda: ocarina 3D translúcida con beat (`escenas3d/ocarina.py` + `escenas/ocarina.html`)
+
+**Contexto.** El remake de *Ocarina of Time* (Switch 2) salió el 5-nov-2026. El dueño quiso un video de trend: la
+*Song of Storms* en una ocarina 3D, en versión electrónica. Pidió explícitamente salirse un poco del look Neon Keys
+(fondo "más Zelda"), con la Trifuerza, y una ocarina gordita, translúcida y con contornos neón.
+
+**Decisión.** Todo con código, sin modelos ni imágenes de IA:
+- Ocarina de revolución (`LatheGeometry`) con sección de superelipse (cuadradona) y `MeshPhysicalMaterial` con
+  `transmission`; el borde neón y la retícula se inyectan en el shader (`onBeforeCompile`, uniform `uNeon` que late
+  con el kick). Los agujeros se pegan a la superficie por raycast (`pegar`).
+- Digitación de ocarina de 12 agujeros en `DIGITACION` (los pulgares se dibujan con `depthTest: false` para verse a
+  través del vidrio).
+- Fondo de aldea con tormenta: el reflejo del esmalte sale de un "estudio" propio pasado por PMREM.
+- La cámara no usa tomas con cortes, sino puntos de paso por sección (`PASOS_CAMARA`) interpolados con Catmull-Rom.
+- Audio en `.venv-synth` (Surge XT para el supersaw, batería de `techno.py`). `ocarina.py` lee sus argumentos antes
+  de importar `techno.py`, porque ese módulo parsea la línea de comandos al importarse.
+
+**Consecuencias.** La capa de texto (canvas) llega sin premultiplicar: el shader de la capa multiplica rgb × alfa (si
+no, lo semitransparente sale blanco; eso hacía los halos "cuadrados"). Cuando el último paso del compositor es el
+`RenderPass` del texto hay que poner un `ShaderPass(CopyShader)` después, o la escena 3D sale negra. Es cover de una
+melodía de Nintendo con su marca (Trifuerza): no entra a Creator Rewards y hay un riesgo pequeño de reclamo.
+
+
+## ADR-029 · Tributo a Zelda #2: Saria's Song en un bosque mágico (`escenas3d/saria.py` + `escenas/saria.html`)
+
+**Contexto.** Segundo video de la serie de la ocarina, ahora con *Saria's Song* (Lost Woods). El dueño pidió quitar
+el molino y poner algo del bosque, y que sea "mágico e hipnotizante" para atrapar y retener (es para ganar
+seguidores, no monetiza).
+
+**Decisión.**
+- Escena aparte (`saria.html`, copia de `ocarina.html`) en vez de parametrizar la de la tormenta: la ocarina, la cinta
+  y la cámara son las mismas; cambia todo el mundo. Bosque de noche hecho con código: troncos torcidos con
+  enredaderas de luz en espiral, un Gran Árbol propio (sin cara) con halo, casitas en tocón, hongos neón, rayos de
+  luna, aurora y estrellas, luciérnagas y esporas, y hadas que orbitan la ocarina con estela (las del drop aceleran
+  sumando fase, sin saltos). Los relámpagos se vuelven `pulsos`: el bosque destella y salen anillos de luz del piso.
+- Audio en `saria.py`: reusa la ocarina, el bajo, el colchón y la subida de `ocarina.py` (se importa después de
+  vaciar `sys.argv`), con un arpegio en semicorcheas que gira desde el segundo 0 (el gancho hipnótico), ambiente de
+  bosque (viento, grillos) y barridos de campanitas de hada en las entradas. Fa lidio a 124 BPM.
+- Botones de Switch 2 según guías del remake: Saria's Song = R A Y (C▶ = A, C◀ = Y). Por confirmar en el juego.
+
+**Consecuencias.** Mismo riesgo de derechos que ADR-028. Si se hace un tercer tributo conviene sacar la ocarina a un
+módulo común en vez de otra copia.
+
+## ADR-030 · Beat explicado #5: trance que abre terminado y escenario de láseres (`escenas3d/trance.py`)
+
+**Contexto.** El dueño pidió otro beat de la serie, ahora trance "chido, bailable y poderoso", que **empiece con todo
+sonando** ("¿Sabes hacer esto?") y luego se arme desde cero. Eligió la paleta "amanecer de festival" y láseres de
+festival como clímax. Pidió ir directo a la versión larga.
+
+**Decisión.** Misma forma que `psytrance.py` (PATRONES + SECCIONES → golpes, audio, textos y guion), 138 BPM en Re
+menor (Rem – Si♭ – Fa – Do). Carriles KICK · BAJO · CLAP · HATS · PAD · ARP; lo que define al género: bajo a
+contratiempo, pad supersaw propio primero largo y luego **cortado en semicorcheas (trance gate)**, arpegio con eco,
+sidechain en todo lo melódico y una melodía propia en supersaw de Surge XT ("Super") que no tiene carril: en la escena
+son los láseres. El gancho usa capas con sufijo " INTRO" (como " MAL" en el psytrance): ya están armadas en el
+cuadro 0 y se caen con un **tape stop** que frena el audio y también la imagen (`mapa_vis` congela el tiempo que se ve;
+el texto sigue el tiempo real). La construcción va 1.5 dB abajo para que el drop pegue (−16.8 LUFS en el drop, como
+el psytrance). Clímax: 152 piezas salen de las baldosas y arman un escenario (dos torres, armadura y un aro que gira)
+con 11 emisores de láser que barren en tres figuras que cambian cada 2 compases; cada nota del lead hace destellar un
+grupo y el aro corre colores. En el break, seis láseres suben al cielo desde atrás del tablero y crecen con la subida.
+
+**Consecuencias.** El drop cae al 70 % (50.4 s de 71.7 s). Los láseres no apuntan a la cámara (de frente queman la
+imagen con el bloom): siempre salen hacia los lados o hacia arriba.
+
+**Revisión (10-nov).** El dueño pidió explicar más: el gancho ahora dice "Seguimos con los tutoriales de música
+electrónica… ¿Quieres aprender a hacer esto?" con todo sonando y el tape stop cae en "Vamos paso a paso". La voz nombra
+las notas de cada parte (kick afinado en Fa1, bajo Re – Si♭ – Fa – Do, las tres notas de cada acorde, el arpegio) y
+salen flotando sobre su carril; el pad gana un **delay ping-pong** (corchea con puntillo) desde su propia sección, antes
+suena seco para que se note el cambio; el sidechain se explica en dos frases. Las secciones que nombran notas empiezan en
+el acorde que nombran y el drop cae en Rem (compás 40). Se quitó el dato de Alemania para no pasar de ~90 s.
+
+
+## ADR-031 · Beat explicado #6: hard techno en un osciloscopio CRT (`hardtechno.py`)
+
+**Contexto.** El dueño pidió un beat "dark" (hard techno / electro tipo Boys Noize) **con otra UI**, para que la serie
+no se vea siempre como el secuenciador 3D. De tres propuestas (osciloscopio CRT, rack modular, bodega industrial)
+eligió el osciloscopio. La prueba de 16 s le gustó y pidió el largo "súper bien".
+
+**Decisión.** Script propio en Python (Pillow + numpy, sin Three.js ni `grabar.js`): la imagen es 2D y así cada cuadro
+sale directo a ffmpeg. Toda la pantalla es el osciloscopio; cada instrumento es un canal (KICK, RUMBLE, HATS + CLAP,
+STAB, GRITO) y su onda es **la envolvente real de su pista de audio** por una portadora visible, con barrido que
+avanza por compás, rastro del compás anterior y persistencia de fósforo (cada cuadro hereda el anterior). 150 BPM en
+Fa menor; síntesis con numpy reusando `clap`, `hat`, `eco`, `filtro` y `ping_pong` de `techno.py`. Abre terminado,
+tape stop, y se enseña con antes/después: kick limpio → saturado, rumble encimado → con sidechain. Clímax distinto a
+los anteriores: el osciloscopio pasa a **modo X-Y** y dibuja el NK, que se deshace en una figura de Lissajous y se
+vuelve una calavera cuya quijada se abre con cada kick. Cierre: la pantalla se apaga como tele vieja (línea → punto).
+Mismas secciones/JSON que los otros beats para pegar la voz con `techno_voz.py --beat beat-hardtechno` y volver a
+renderizar con `hardtechno.py --datos … --audio …`.
+
+**Consecuencias.** Render de ~80 s en unos 20–25 min en esta Mac. Los subtítulos van arriba (y≈230) para no tapar
+las ondas. Falta agregar `beat-hardtechno` a `PEDAZOS`/`LUGAR_FRASE` de `techno_voz.py` cuando llegue la voz.
+
+**Revisión (12-nov).** Al dueño le gustó mucho que el kick entre limpio y luego saturado, y pidió lo mismo con todo:
+cada instrumento entra **limpio y luego con su proceso** (rumble seno → distorsionado → sidechain, hats limpios →
+saturados, clap seco → con reverb, acorde de senos → FM + delay, sierra simple → saturación + bitcrush + filtro). Las
+secciones aceptan capas `(compás 1, compás 2)` para el antes/después, cada caso lleva su etiqueta en la pantalla y la
+onda cambia de forma (redonda → cuadrada / rota) además del sonido. El gancho va sin el sinte que grita: completo
+sonaba demasiado saturado.

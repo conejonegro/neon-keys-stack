@@ -6,8 +6,8 @@ música chiptune (sintetizada aquí, sin samples ni derechos de terceros). Los s
 de la marca y salen palabra por palabra, como en datos_curiosos.py.
 
 Uso:
-    .venv/bin/python ajolote.py                         # video completo → out/videos/dato-ajolote.mp4
-    .venv/bin/python ajolote.py --hasta 15              # prueba de 15 s → out/pruebas/dato-ajolote-prueba.mp4
+    .venv/bin/python ajolote.py                         # video completo → out/videos/datos/dato-ajolote.mp4
+    .venv/bin/python ajolote.py --hasta 15              # prueba de 15 s → out/pruebas/datos/dato-ajolote-prueba.mp4
     .venv/bin/python ajolote.py --preview 9             # solo un cuadro PNG en t=9s
 """
 
@@ -27,7 +27,7 @@ from neon_keys import (BRAND_GLOW, COLOR_LEFT, COLOR_RIGHT, FONT_BOLD, FPS, H, S
                        glow_text, make_brand_layer)
 
 ROOT = Path(__file__).resolve().parent
-OUTPUT = ROOT / "out" / "videos" / "dato-ajolote.mp4"
+OUTPUT = ROOT / "out" / "videos" / "datos" / "dato-ajolote.mp4"
 
 # --- Pixel art: la escena se dibuja a 180×320 y se agranda ×6 sin suavizar (mismo pixel que el sprite) ---
 PX = 6
@@ -569,7 +569,7 @@ def main():
     ap.add_argument("--salida", default=None)
     args = ap.parse_args()
     duration = min(DURATION, args.hasta) if args.hasta else DURATION
-    default_out = ROOT / "out" / "pruebas" / (OUTPUT.stem + "-prueba.mp4") if args.hasta else OUTPUT
+    default_out = ROOT / "out" / "pruebas" / "datos" / (OUTPUT.stem + "-prueba.mp4") if args.hasta else OUTPUT
     out = Path(args.salida) if args.salida else default_out
 
     r = Renderer(duration)

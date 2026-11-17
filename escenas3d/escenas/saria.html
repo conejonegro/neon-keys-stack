@@ -1,0 +1,1084 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html, body { margin: 0; background: #080416; overflow: hidden; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "/node_modules/three/build/three.module.js",
+  "three/addons/": "/node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Tributo a Zelda: Ocarina of Time, "Saria's Song" en electrónico. La misma ocarina de vidrio de ocarina.html flota
+// en un bosque mágico de noche: árboles gigantes con enredaderas de luz, el Gran Árbol al fondo con su halo, casitas
+// en tocón, Trifuerzas doradas (una grande sobre el Gran Árbol y piezas que flotan), rayos de luna, aurora,
+// luciérnagas y esporas, y tres hadas que giran alrededor de la ocarina
+// dejando estela (lo hipnótico). Los agujeros que se tapan se encienden en dorado y el botón de Switch (R, A, Y) sale
+// de la boquilla; abajo, la cinta de botones. Con cada destello (D.pulsos) salen anillos de luz del piso y el bosque
+// se enciende. Todo es diseño propio hecho con geometría (sin personajes de Nintendo). grabar.js llama a
+// window.cargar(datos) y luego a window.dibujar(t); todo sale de t. Sin --datos se usan los datos de prueba de DEMO.
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { CopyShader } from 'three/addons/shaders/CopyShader.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+
+const W = 1080, H = 1920;
+const DORADO = '#ffd36a', BLANCO = '#ffffff';
+
+// Notas de la ocarina: botón de N64, botón de Switch 2 (según las guías del remake: Song of Storms = L R X,
+// Saria's Song = R A Y) y nota MIDI
+const BOTONES = {
+  'A': { sw: 'L', midi: 62 }, 'C▼': { sw: 'R', midi: 65 }, 'C▲': { sw: 'X', midi: 74 },
+  'C▶': { sw: 'A', midi: 69 }, 'C◀': { sw: 'Y', midi: 71 },
+};
+// Digitación de ocarina de 12 agujeros en Do: agujeros que se TAPAN (los pulgares van por detrás)
+const TODOS = ['L1', 'L2', 'L3', 'L4', 'R1', 'R2', 'R3', 'R4', 'PI', 'PD'];
+const DIGITACION = {
+  62: TODOS.filter(h => h !== 'R4'),                                         // Re
+  65: ['L1', 'L2', 'L3', 'L4', 'R1', 'PI', 'PD'],                            // Fa
+  69: ['L1', 'L2', 'L3', 'PI', 'PD'],                                        // La
+  71: ['L1', 'L2', 'PI', 'PD'],                                              // Si
+  74: ['PI', 'PD'],                                                          // Re agudo: solo pulgares
+  64: TODOS.filter(h => h !== 'R4' && h !== 'R3'),                           // Mi
+  67: ['L1', 'L2', 'L3', 'L4', 'PI', 'PD'],                                  // Sol
+  72: ['L1', 'PI', 'PD'],                                                    // Do agudo
+  76: ['PD'],                                                                // Mi agudo
+  77: [],                                                                    // Fa agudo: todo abierto
+};
+const NOMBRE_NOTA = { 62: 'Re', 64: 'Mi', 65: 'Fa', 67: 'Sol', 69: 'La', 71: 'Si', 72: 'Do', 74: 'Re↑', 76: 'Mi↑', 77: 'Fa↑' };
+// Cada nota trae su MIDI (del JSON) o se saca de su botón (datos de prueba)
+const midiDe = n => n.midi ?? BOTONES[n.boton].midi;
+
+// Datos de prueba (los cuadros para aprobar el look): la frase de Saria's Song y secciones
+const DEMO = (() => {
+  const bpm = 124, b = 60 / bpm;
+  const frase = ['C▼', 'C▶', 'C◀', 'C▼', 'C▶', 'C◀'];
+  const notas = [];
+  for (const t0 of [0.2, 4, 10, 15.4]) frase.forEach((n, i) => notas.push({ t: t0 + i * b * 0.66, boton: n, dur: b * 0.5 }));
+  return {
+    bpm, total: 21,
+    pulsos: [4, 10, 12, 14, 16, 18, 20],
+    notas,
+    kicks: Array.from({ length: 40 }, (_, i) => 4 + i * b).filter(t => t < 20.5),
+    secciones: [
+      { t0: 0, t1: 4, toma: 'gancho', titulo: 'TRIBUTO A ZELDA', juego: 'Ocarina of Time', cancion: "Saria's Song" },
+      { t0: 4, t1: 10, toma: 'capa', texto: '' },
+      { t0: 10, t1: 21, toma: 'drop', texto: '' },
+    ],
+  };
+})();
+
+function azar(semilla) {
+  let s = semilla % 2147483647 || 1;
+  return () => ((s = (s * 16807) % 2147483647) / 2147483647);
+}
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.autoClear = false;
+document.body.appendChild(renderer.domElement);
+
+const escena = new THREE.Scene();
+const COLOR_NIEBLA = new THREE.Color(0x05140f);
+escena.background = COLOR_NIEBLA.clone();
+escena.fog = new THREE.Fog(COLOR_NIEBLA, 16, 105);
+const camara = new THREE.PerspectiveCamera(40, W / H, 0.1, 300);
+
+// ------------------------------------------------------------------ reflejos: bosque de noche para el vidrio
+// La ocarina refleja la luz de luna entre las hojas arriba, verde-cian del musgo a los lados y la luz cálida de las casitas.
+{
+  const estudio = new THREE.Scene();
+  estudio.background = new THREE.Color(0x030a07);
+  const panel = (color, fuerza, x, y, z, w, h) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(fuerza), side: THREE.DoubleSide }));
+    m.position.set(x, y, z);
+    m.lookAt(0, 0, 0);
+    estudio.add(m);
+  };
+  panel(0xd8f4ff, 2.2, 0, 9, 3, 8, 3);        // luna entre las hojas: el brillo largo del vidrio
+  panel(0x30e0b0, 1.1, -9, 2, 2, 3, 10);      // musgo que brilla a la izquierda
+  panel(0xffa848, 1.4, 9, 1, -1, 3, 8);       // luz cálida de las casitas a la derecha
+  panel(0x0c2a14, 0.6, 0, -6, 6, 14, 2);      // piso de musgo
+  panel(0x7040c0, 0.6, 0, 3, -9, 12, 6);      // bruma violeta al fondo
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  renderer.autoClear = true;                  // el PMREM necesita limpiar sus cuadros
+  escena.environment = pmrem.fromScene(estudio, 0.02).texture;
+  renderer.autoClear = false;
+}
+
+const hemi = new THREE.HemisphereLight(0x7fc8b0, 0x0a160c, 0.5);
+escena.add(hemi);
+const luna = new THREE.DirectionalLight(0xbfe6ff, 0.7);   // luz de luna que se cuela entre las copas
+luna.position.set(-6, 10, 4);
+escena.add(luna);
+const calida = new THREE.DirectionalLight(0xffa84a, 1.1); // contraluz de las casitas
+calida.position.set(6, 1.5, -6);
+escena.add(calida);
+const luzPulso = new THREE.PointLight(0x7dffd0, 0, 40, 1.5);  // se prende con cada destello del bosque
+luzPulso.position.set(0, -3, 2);
+escena.add(luzPulso);
+
+// ------------------------------------------------------------------ fondo: cielo con estrellas, árboles gigantes, aldea
+const GLSL_RUIDO = `
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float ruido(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y); }
+  float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 5; i++){ s += a * ruido(p); p *= 2.03; a *= 0.5; } return s; }`;
+const cielo = new THREE.Mesh(new THREE.SphereGeometry(200, 48, 24), new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: { tiempo: { value: 0 }, pulso: { value: 0 } },
+  vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform float tiempo; uniform float pulso; varying vec3 vP;
+    ${GLSL_RUIDO}
+    void main(){
+      vec3 d = normalize(vP);
+      vec3 col = mix(vec3(0.012, 0.04, 0.032), vec3(0.002, 0.004, 0.012), smoothstep(-0.02, 0.5, d.y));
+      // velo de aurora verde-violeta que ondula despacio (lo hipnótico del fondo)
+      float banda = sin(d.x * 6.0 + tiempo * 0.35 + 2.0 * fbm(d.xz * 3.0 + tiempo * 0.05));
+      float aurora = smoothstep(0.55, 1.0, banda) * smoothstep(0.08, 0.3, d.y) * smoothstep(0.75, 0.35, d.y);
+      col += mix(vec3(0.05, 0.4, 0.28), vec3(0.3, 0.1, 0.45), d.x * 0.5 + 0.5) * aurora * (0.35 + 0.5 * pulso);
+      // estrellas que titilan
+      vec2 c = floor(d.xz / max(d.y + 0.2, 0.05) * 140.0);
+      float h = hash(c);
+      float est = step(0.993, h) * (0.5 + 0.5 * sin(tiempo * (2.0 + 4.0 * hash(c + 1.7)) + h * 40.0));
+      col += vec3(0.75, 0.9, 1.0) * est * smoothstep(0.1, 0.3, d.y);
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+}));
+escena.add(cielo);
+
+// Trifuerza: tres triángulos (lado total s), centrada
+function puntasTrifuerza(s) {
+  const h = s * Math.sqrt(3) / 2;
+  return [[[0, h / 2], [-s / 4, 0], [s / 4, 0]], [[-s / 4, 0], [-s / 2, -h / 2], [0, -h / 2]], [[s / 4, 0], [0, -h / 2], [s / 2, -h / 2]]];
+}
+function trifuerza(s) { return puntasTrifuerza(s).map(p => new THREE.Shape(p.map(q => new THREE.Vector2(...q)))); }
+// Solo el borde de un triángulo (ancho en unidades): el triángulo con un hueco del mismo triángulo encogido
+function bordeTriangulo([a, b, c], ancho) {
+  const cx = (a[0] + b[0] + c[0]) / 3, cy = (a[1] + b[1] + c[1]) / 3;
+  const k = 1 - ancho / (Math.hypot(b[0] - a[0], b[1] - a[1]) / (2 * Math.sqrt(3)));
+  const forma = new THREE.Shape([a, b, c].map(q => new THREE.Vector2(...q)));
+  forma.holes.push(new THREE.Path([a, c, b].map(q => new THREE.Vector2(cx + (q[0] - cx) * k, cy + (q[1] - cy) * k))));
+  return forma;
+}
+// En el cielo: grande y tenue entre las copas; late con el kick y se enciende con los destellos
+const matTriCielo = new THREE.MeshBasicMaterial({ color: 0xffc848, transparent: true, opacity: 0.1, fog: false, depthWrite: false });
+const triCielo = new THREE.Mesh(new THREE.ShapeGeometry(trifuerza(34)), matTriCielo);
+triCielo.position.set(6, 30, -150);
+triCielo.lookAt(0, 0, 0);
+escena.add(triCielo);
+
+const Y_PISO = -5.5;
+// Piso de musgo: manchas que brillan (bioluminiscencia), un sendero y anillos de luz que salen de debajo de la
+// ocarina con cada destello (todo función de t)
+const MAX_ANILLOS = 6;
+const piso = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.ShaderMaterial({
+  uniforms: { tiempo: { value: 0 }, pulso: { value: 0 }, niebla: { value: COLOR_NIEBLA }, anillos: { value: new Array(MAX_ANILLOS).fill(-1) } },
+  vertexShader: `varying vec3 vMundo;
+    void main(){ vec4 m = modelMatrix * vec4(position, 1.0); vMundo = m.xyz; gl_Position = projectionMatrix * viewMatrix * m; }`,
+  fragmentShader: `uniform float tiempo; uniform float pulso; uniform vec3 niebla; uniform float anillos[${MAX_ANILLOS}]; varying vec3 vMundo;
+    ${GLSL_RUIDO}
+    void main(){
+      vec2 p = vMundo.xz;
+      float n = fbm(p * 0.3);
+      vec3 col = mix(vec3(0.003, 0.012, 0.006), vec3(0.008, 0.03, 0.014), n);
+      float sendero = smoothstep(2.4, 1.0, abs(p.x - 2.0 * sin(p.y * 0.07)) + (n - 0.5) * 1.4);
+      col = mix(col, vec3(0.016, 0.014, 0.01) + 0.01 * n, sendero * 0.8);
+      // musgo que brilla en puntitos (respira despacio)
+      vec2 c = floor(p / 0.6), f = fract(p / 0.6) - 0.5;
+      float h = hash(c);
+      float punto = (1.0 - smoothstep(0.03, 0.12, length(f - (vec2(hash(c + 2.3), hash(c + 7.1)) - 0.5) * 0.6)))
+                    * step(0.82, h) * smoothstep(0.45, 0.7, fbm(p * 0.12 + 3.0));
+      vec3 cMusgo = mix(vec3(0.2, 1.0, 0.7), vec3(0.4, 0.8, 1.0), hash(c + 9.0));
+      col += cMusgo * punto * (0.35 + 0.3 * sin(tiempo * 1.3 + h * 30.0) + 0.6 * pulso);
+      // anillos de luz que se abren desde la ocarina
+      float r = length(p);
+      for (int i = 0; i < ${MAX_ANILLOS}; i++) {
+        float e = anillos[i];
+        if (e < 0.0) continue;
+        float radio = 2.0 + 34.0 * (1.0 - exp(-e * 1.4));
+        float a = 1.0 - smoothstep(0.0, 0.35 + e * 0.4, abs(r - radio));
+        col += mix(vec3(0.2, 1.0, 0.75), vec3(1.0, 0.3, 0.85), 0.5 + 0.5 * sin(r * 0.15 - tiempo)) * a * exp(-e * 1.3) * 0.7;
+      }
+      float dist = length(vMundo - cameraPosition);
+      col = mix(col, niebla, smoothstep(16.0, 105.0, dist));
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+}));
+piso.rotation.x = -Math.PI / 2;
+piso.position.y = Y_PISO;
+escena.add(piso);
+
+// Árboles gigantes: tronco con corteza torcida, raíces que se abren, copa oscura y una enredadera de luz en espiral
+// (la enredadera late con el beat y se enciende con cada destello)
+const matCorteza = new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 0.95 });
+const matCopa = new THREE.MeshStandardMaterial({ color: 0x0a2414, roughness: 1, flatShading: true });
+const matEnredadera = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x40ffc0) });
+const matEnredadera2 = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff50d0) });
+function tronco(r, h, semilla) {
+  const g = new THREE.CylinderGeometry(r * 0.7, r * 1.15, h, 18, 24, true);
+  const p = g.attributes.position;
+  const rr = azar(semilla), fase = rr() * 10;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const a = Math.atan2(z, x) + 0.25 * y / h * 3;                 // torcido
+    const k = 1 + 0.12 * Math.sin(a * 5 + fase) + 0.06 * Math.sin(a * 13 + y * 0.7) + 0.35 * Math.exp(-(y + h / 2) / (r * 0.8));
+    const rad = Math.hypot(x, z) * k;
+    p.setXYZ(i, rad * Math.cos(a), y, rad * Math.sin(a));
+  }
+  g.computeVertexNormals();
+  return g;
+}
+function arbol(x, z, r, h, semilla, conCopa = true) {
+  const g = new THREE.Group();
+  const t = new THREE.Mesh(tronco(r, h, semilla), matCorteza);
+  t.position.y = h / 2;
+  g.add(t);
+  const rr = azar(semilla + 5);
+  for (let i = 0; i < 5; i++) {                                   // raíces
+    const a = i / 5 * Math.PI * 2 + rr() * 0.6, largo = r * (2.2 + rr());
+    const raiz = new THREE.Mesh(new THREE.ConeGeometry(r * 0.45, largo, 7), matCorteza);
+    raiz.position.set(Math.cos(a) * r * 1.1, r * 0.35, Math.sin(a) * r * 1.1);
+    raiz.rotation.set(Math.sin(a) * 1.25, 0, -Math.cos(a) * 1.25);
+    g.add(raiz);
+  }
+  // enredadera de luz: espiral que sube pegada al tronco
+  const pts = [];
+  const vueltas = 2.5 + rr() * 1.5, a0 = rr() * 6;
+  for (let i = 0; i <= 120; i++) {
+    const u = i / 120, a = a0 + u * vueltas * Math.PI * 2;
+    const rad = r * (1.15 - 0.45 * u) * 1.06 + 0.05;
+    pts.push(new THREE.Vector3(Math.cos(a) * rad, u * h * 0.85 + 0.2, Math.sin(a) * rad));
+  }
+  g.add(new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 240, Math.max(0.05, r * 0.035), 6, false),
+    semilla % 3 ? matEnredadera : matEnredadera2));
+  if (conCopa) {
+    for (let i = 0; i < 6; i++) {
+      const b = new THREE.Mesh(new THREE.IcosahedronGeometry(r * (2.2 + rr() * 1.5), 1), matCopa);
+      b.position.set((rr() - 0.5) * r * 5, h + (rr() - 0.3) * r * 2, (rr() - 0.5) * r * 5);
+      g.add(b);
+    }
+  }
+  g.position.set(x, Y_PISO, z);
+  escena.add(g);
+  return g;
+}
+// El Gran Árbol al fondo (sin cara: diseño propio), con un halo que respira
+const granArbol = arbol(-4, -78, 7, 46, 7);
+const halo = new THREE.Mesh(new THREE.PlaneGeometry(90, 90), new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+  uniforms: { fuerza: { value: 0.3 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform float fuerza; varying vec2 vUv;
+    void main(){ float d = length(vUv - 0.5) * 2.0; gl_FragColor = vec4(vec3(0.15, 0.7, 0.5) * fuerza * exp(-d * d * 4.0), 1.0); }`,
+}));
+halo.position.set(-4, 18, -84);
+escena.add(halo);
+// Bosque alrededor: troncos enormes a los lados (enmarcan el cuadro vertical) y más chicos al fondo
+[[-13, -14, 2.2, 40, 11], [14, -20, 2.6, 42, 12], [-20, -34, 2.8, 44, 13], [24, -40, 3, 44, 14], [-9, -48, 1.8, 34, 15],
+  [12, -58, 2.2, 38, 16], [-28, -60, 3, 44, 17], [30, -70, 3.2, 46, 18], [-40, -24, 3, 44, 19], [38, -14, 2.6, 42, 20],
+  [18, -88, 2.5, 40, 21], [-22, -92, 2.8, 42, 22]].forEach(([x, z, r, h, s]) => arbol(x, z, r, h, s));
+
+// Casitas en tocón (como las de una aldea del bosque): puerta redonda y ventanas con luz cálida, techo de hojas
+const matVentana = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffa040).multiplyScalar(2.2) });
+function casita(x, z, r, h, ry) {
+  const g = new THREE.Group();
+  const t = new THREE.Mesh(tronco(r, h, Math.round(x * 7 + z)), matCorteza);
+  t.position.y = h / 2;
+  const techo = new THREE.Mesh(new THREE.ConeGeometry(r * 1.5, h * 0.7, 9), matCopa);
+  techo.position.y = h + h * 0.3;
+  g.add(t, techo);
+  const puerta = new THREE.Mesh(new THREE.CircleGeometry(r * 0.38, 24), matVentana);
+  puerta.position.set(0, r * 0.45, r * 1.12);
+  const ventanita = new THREE.Mesh(new THREE.CircleGeometry(r * 0.18, 18), matVentana);
+  ventanita.position.set(r * 0.5, h * 0.62, r * 0.85);
+  ventanita.rotation.y = 0.5;
+  g.add(puerta, ventanita);
+  g.position.set(x, Y_PISO, z);
+  g.rotation.y = ry;
+  escena.add(g);
+}
+casita(8, -30, 2.0, 4.0, -0.35);
+casita(-9, -38, 2.3, 4.6, 0.4);
+casita(17, -48, 2.4, 4.2, -0.6);
+casita(2, -56, 2.0, 3.8, 0.05);
+casita(-18, -50, 2.2, 4.4, 0.6);
+
+// Trifuerzas del fondo (lo que dice "Zelda" sin personajes): una grande delante del halo del Gran Árbol, con
+// contorno dorado brillante y relleno tenue, que se mece despacio; y piezas sueltas (triángulos) que flotan entre
+// los árboles, suben girando y se desvanecen. Brillan con el kick y con los destellos del bosque.
+const matTriRelleno = new THREE.MeshBasicMaterial({ color: 0xffc040, transparent: true, opacity: 0.16, fog: false, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+const matTriBorde = new THREE.MeshBasicMaterial({ color: 0xffd060, fog: false, side: THREE.DoubleSide });
+const triGrande = new THREE.Group();
+const triGiro = new THREE.Group();
+triGrande.add(triGiro);
+triGiro.add(new THREE.Mesh(new THREE.ShapeGeometry(trifuerza(13)), matTriRelleno));
+for (const pts of puntasTrifuerza(13)) triGiro.add(new THREE.Mesh(new THREE.ShapeGeometry(bordeTriangulo(pts, 0.3)), matTriBorde));
+escena.add(triGrande);
+const piezasTri = [];
+{
+  const r = azar(512);
+  const lado = 1;
+  const pts = [[0, lado / Math.sqrt(3)], [-lado / 2, -lado / (2 * Math.sqrt(3))], [lado / 2, -lado / (2 * Math.sqrt(3))]];
+  const geoRelleno = new THREE.ShapeGeometry(new THREE.Shape(pts.map(q => new THREE.Vector2(...q))));
+  const geoBorde = new THREE.ShapeGeometry(bordeTriangulo(pts, 0.06));
+  for (let i = 0; i < 6; i++) {
+    const relleno = new THREE.MeshBasicMaterial({ color: 0xffc040, transparent: true, opacity: 0, fog: false, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    const borde = new THREE.MeshBasicMaterial({ color: 0xffd060, transparent: true, opacity: 0, fog: false, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    const g = new THREE.Group();
+    g.add(new THREE.Mesh(geoRelleno, relleno), new THREE.Mesh(geoBorde, borde));
+    g.scale.setScalar(0.6 + r() * 0.9);
+    escena.add(g);
+    const lado = r() < 0.5 ? -1 : 1;     // a los lados de la ocarina, para no taparla
+    piezasTri.push({ g, relleno, borde, x: lado * (3.5 + r() * 10), z: -16 - r() * 28, vel: 0.35 + r() * 0.35,
+      fase: r() * 16, giro: (r() - 0.5) * 1.2, giroZ: (r() - 0.5) * 0.6 });
+  }
+}
+
+// Rayos de luna entre las copas: planos con degradado que se mecen despacio
+const rayosLuna = [];
+for (const [x, z, ancho, inc] of [[-6, -22, 5, 0.22], [9, -36, 6, -0.18], [-2, -50, 7, 0.12], [16, -26, 4, -0.25]]) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(ancho, 60), new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false,
+    uniforms: { fuerza: { value: 0.1 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: `uniform float fuerza; varying vec2 vUv;
+      void main(){ float lado = sin(vUv.x * 3.14159); float a = lado * lado * smoothstep(0.0, 0.5, vUv.y) * (1.0 - smoothstep(0.85, 1.0, vUv.y));
+        gl_FragColor = vec4(vec3(0.6, 0.95, 0.85) * a * fuerza, 1.0); }`,
+  }));
+  m.position.set(x, Y_PISO + 28, z);
+  m.rotation.z = inc;
+  m.userData.inc = inc;
+  escena.add(m);
+  rayosLuna.push(m);
+}
+
+// Luciérnagas y esporas: puntos que flotan (posición = función de t, sin estado) y titilan cada uno a su ritmo
+const N_LUCES = 350;                 // pocas: el dueño pidió menos adornos que brillan
+const luces = [];
+{
+  const r = azar(777);
+  for (let i = 0; i < N_LUCES; i++) {
+    const espora = i % 3 === 0;                                     // las esporas suben despacio; las luciérnagas vagan
+    luces.push({ x: (r() - 0.5) * 50, y: Y_PISO + r() * 16, z: -48 + r() * 50, f: 0.2 + r() * 0.5, fase: r() * 6.28, espora,
+      color: new THREE.Color(espora ? 0x9fffe0 : (r() < 0.7 ? 0xd8ff6a : 0x7ff0ff)) });
+  }
+}
+const geoLuces = new THREE.BufferGeometry();
+geoLuces.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N_LUCES * 3), 3));
+geoLuces.setAttribute('color', new THREE.BufferAttribute(new Float32Array(N_LUCES * 3), 3));
+
+// ------------------------------------------------------------------ la ocarina
+// Cuerpo de camote (ocarina "italiana" de 12 agujeros): perfil de revolución a lo largo de x, aplanado arriba,
+// un poco curvo; la boquilla sale del extremo ancho. El esmalte es cerámica azul-cian con capa de barniz.
+const ocarina = new THREE.Group();
+escena.add(ocarina);
+const pieza = new THREE.Group();              // la ocarina en su sistema local (la inclinación va en "ocarina")
+pieza.scale.setScalar(0.84);
+ocarina.add(pieza);
+
+const LARGO = 3.6;
+function radio(u) {                           // u: 0 = extremo ancho (boquilla), 1 = punta
+  const base = 1.0 - 0.3 * u;                 // punta gordita, no afilada
+  return base * Math.pow(Math.sin(Math.PI * u), 0.36) * 0.95;
+}
+const geoCuerpo = (() => {
+  const perfil = [];
+  const N = 120;
+  for (let i = 0; i <= N; i++) {
+    const u = i / N;
+    perfil.push(new THREE.Vector2(Math.max(radio(u), 0.0001), u * LARGO - LARGO / 2));
+  }
+  const g = new THREE.LatheGeometry(perfil, 128);
+  g.rotateZ(-Math.PI / 2);                    // el eje del torno pasa a ser x
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    // sección de "cuadrado redondeado" (superelipse) en vez de óvalo: la ocarina se ve más cuadradona
+    const r0 = Math.hypot(y, z), a = Math.atan2(y, z), c = Math.cos(a), sn = Math.sin(a);
+    z = r0 * Math.sign(c) * Math.pow(Math.abs(c), 0.6);
+    y = r0 * Math.sign(sn) * Math.pow(Math.abs(sn), 0.6);
+    y *= y > 0 ? 0.74 : 0.8;                  // gordita: alta, un poco más plana arriba
+    z += 0.16 * (x * x) / 3 - 0.1;            // curva de camote
+    y += 0.05 * Math.sin(x * 0.9);
+    p.setXYZ(i, x, y, z);
+  }
+  const m = mergeVertices(g, 1e-4);
+  m.computeVertexNormals();
+  // En las dos puntas el torno deja normales en cero (y el brillo daría NaN): apuntan a lo largo del eje
+  const n = m.attributes.normal, q = m.attributes.position;
+  for (let i = 0; i < n.count; i++) {
+    if (Math.hypot(n.getX(i), n.getY(i), n.getZ(i)) < 1e-4 || !isFinite(n.getX(i))) n.setXYZ(i, Math.sign(q.getX(i)) || 1, 0, 0);
+  }
+  return m;
+})();
+// Vidrio azul translúcido (deja ver la aldea detrás) con borde neón que brilla según el ángulo (cian en la boquilla →
+// magenta en la punta) y una retícula digital fina; el borde y la retícula laten con el kick (uniform neon)
+const uNeon = { value: 1 };
+const matEsmalte = new THREE.MeshPhysicalMaterial({
+  color: 0x2f7fff, roughness: 0.12, metalness: 0.0, transmission: 0.82, thickness: 0.9, ior: 1.45,
+  attenuationColor: new THREE.Color(0x0a3cff), attenuationDistance: 1.6,
+  clearcoat: 1.0, clearcoatRoughness: 0.04, envMapIntensity: 1.3,
+  emissive: new THREE.Color(0x001030), emissiveIntensity: 1.0,
+});
+matEsmalte.onBeforeCompile = (sh) => {
+  sh.uniforms.uNeon = uNeon;
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vLocal;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLocal = position;');
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vLocal;\nuniform float uNeon;')
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      vec3 neon = mix(vec3(0.0, 0.94, 1.0), vec3(1.0, 0.2, 0.82), smoothstep(-1.6, 1.8, vLocal.x));
+      float fres = pow(1.0 - abs(dot(normalize(normal), normalize(vViewPosition))), 2.6);
+      totalEmissiveRadiance += neon * fres * 1.6 * uNeon;
+      vec2 g = vec2(vLocal.x * 7.0, vLocal.z * 7.0);
+      vec2 dg = abs(fract(g - 0.5) - 0.5) / fwidth(g);
+      float linea = 1.0 - min(min(dg.x, dg.y), 1.0);
+      totalEmissiveRadiance += neon * linea * 0.22 * uNeon;`);
+};
+const cuerpo = new THREE.Mesh(geoCuerpo, matEsmalte);
+pieza.add(cuerpo);
+
+// Boquilla: barra redondeada que sale del extremo ancho hacia el que toca
+const geoBoquilla = (() => {
+  const g = new THREE.CapsuleGeometry(0.3, 0.75, 12, 48);
+  g.rotateZ(Math.PI / 2);                     // a lo largo de x; la punta (donde se sopla) es -x
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i);
+    const k = 1 - 0.28 * Math.min(Math.max(-x / 0.68, 0), 1);
+    p.setXYZ(i, x, p.getY(i) * 0.58 * k, p.getZ(i) * 1.05 * k);
+  }
+  g.computeVertexNormals();
+  return g;
+})();
+const boquilla = new THREE.Mesh(geoBoquilla, matEsmalte);
+boquilla.position.set(-1.5, 0.0, 0.4);
+boquilla.rotation.y = 0.7;
+boquilla.rotation.z = -0.06;
+pieza.add(boquilla);
+// Canal del aire (rendija oscura en la punta de la boquilla)
+const matHueco = new THREE.MeshBasicMaterial({ color: 0x03081a, transparent: true, opacity: 0.85 });
+const rendija = new THREE.Mesh(new RoundedBoxGeometry(0.03, 0.045, 0.26, 2, 0.02), matHueco);
+rendija.position.set(-0.66, 0.0, 0);
+boquilla.add(rendija);
+// Punto de salida del sonido (punta de la boquilla) para ondas y símbolos
+const salidaSonido = new THREE.Object3D();
+salidaSonido.position.set(-0.72, 0, 0);
+boquilla.add(salidaSonido);
+
+// Costura neón en el ecuador del cuerpo y en el labio de la ventana
+const matFilo = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x00f0ff).multiplyScalar(1.5) });
+{
+  const pts = [];
+  for (let i = 0; i <= 160; i++) {
+    const u = 0.02 + 0.96 * i / 160;
+    const x = u * LARGO - LARGO / 2;
+    pts.push(new THREE.Vector3(x, 0.05 * Math.sin(x * 0.9), radio(u) + 0.16 * x * x / 3 - 0.1));
+  }
+  for (let i = 160; i >= 0; i--) {
+    const u = 0.02 + 0.96 * i / 160;
+    const x = u * LARGO - LARGO / 2;
+    pts.push(new THREE.Vector3(x, 0.05 * Math.sin(x * 0.9), -radio(u) + 0.16 * x * x / 3 - 0.1));
+  }
+  const curva = new THREE.CatmullRomCurve3(pts, true);
+  pieza.add(new THREE.Mesh(new THREE.TubeGeometry(curva, 400, 0.014, 8, true), matFilo));
+}
+
+// Ventana (el filo que corta el aire) arriba, junto a la boquilla
+const raycaster = new THREE.Raycaster();
+function sobreCuerpo(x, z, abajo = false) {
+  raycaster.set(new THREE.Vector3(x, abajo ? -5 : 5, z), new THREE.Vector3(0, abajo ? 1 : -1, 0));
+  const h = raycaster.intersectObject(cuerpo)[0];
+  return { punto: h.point.clone(), normal: h.face.normal.clone() };
+}
+function pegar(obj, x, z, abajo = false, hundir = 0) {
+  const { punto, normal } = sobreCuerpo(x, z, abajo);
+  obj.position.copy(punto).addScaledVector(normal, -hundir);
+  obj.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+  pieza.add(obj);
+  return obj;
+}
+{
+  const v = new THREE.Group();
+  const forma = new THREE.Shape();
+  const w = 0.3, h = 0.17, r = 0.05;
+  forma.moveTo(-w / 2 + r, -h / 2);
+  forma.lineTo(w / 2 - r, -h / 2); forma.quadraticCurveTo(w / 2, -h / 2, w / 2, -h / 2 + r);
+  forma.lineTo(w / 2, h / 2 - r); forma.quadraticCurveTo(w / 2, h / 2, w / 2 - r, h / 2);
+  forma.lineTo(-w / 2 + r, h / 2); forma.quadraticCurveTo(-w / 2, h / 2, -w / 2, h / 2 - r);
+  forma.lineTo(-w / 2, -h / 2 + r); forma.quadraticCurveTo(-w / 2, -h / 2, -w / 2 + r, -h / 2);
+  const hueco = new THREE.Mesh(new THREE.ShapeGeometry(forma, 8), matHueco);
+  v.add(hueco);
+  // Bisel alrededor de la ventana (tubo que sigue el contorno)
+  const contorno = new THREE.CatmullRomCurve3(forma.getSpacedPoints(48).slice(0, -1).map(q => new THREE.Vector3(q.x, q.y, 0)), true);
+  v.add(new THREE.Mesh(new THREE.TubeGeometry(contorno, 96, 0.016, 8, true), new THREE.MeshPhysicalMaterial({
+    color: 0x062a66, roughness: 0.25, clearcoat: 1, envMapIntensity: 1.2,
+  })));
+  // El labio (filo que corta el aire): una rayita de luz en el lado de la punta
+  const labio = new THREE.Mesh(new THREE.BoxGeometry(0.012, h * 0.8, 0.01), matFilo);
+  labio.position.set(w / 2 - 0.01, 0, 0.006);
+  v.add(labio);
+  pegar(v, -1.0, 0.36, false, -0.003);
+  v.rotateZ(-0.5);
+}
+
+// Trifuerza grabada en oro junto a la boquilla (como la ocarina del juego); brilla con cada nota
+const matOro = new THREE.MeshPhysicalMaterial({
+  color: 0xe0ac3a, metalness: 1, roughness: 0.28, clearcoat: 1, emissive: new THREE.Color(0xffa020), emissiveIntensity: 0,
+});
+{
+  const g = new THREE.Mesh(new THREE.ExtrudeGeometry(trifuerza(0.36), { depth: 0.012, bevelEnabled: true, bevelThickness: 0.006, bevelSize: 0.006, bevelSegments: 2 }), matOro);
+  const v = new THREE.Group();
+  v.add(g);
+  pegar(v, -0.6, 0.13, false, -0.012);
+  v.rotateZ(-0.35);
+}
+
+// Agujeros: hueco oscuro + bisel + anillo de luz (el que se enciende cuando hay que taparlo)
+const AGUJEROS = {
+  //    x      z     radio
+  L1: [-1.02, -0.06, 0.1], L2: [-0.62, -0.22, 0.105], L3: [-0.2, -0.3, 0.105], L4: [0.2, -0.28, 0.085],
+  R1: [0.52, 0.34, 0.1], R2: [0.9, 0.24, 0.1], R3: [1.24, 0.12, 0.09], R4: [1.5, -0.06, 0.07],
+  SI: [-0.42, 0.42, 0.06], SD: [0.18, 0.5, 0.06],                 // agujeros chicos (sub-agujeros)
+  PI: [-0.7, 0.05, 0.12, true], PD: [0.55, -0.05, 0.12, true],    // pulgares, por detrás
+};
+const anillos = {};
+const matBisel = new THREE.MeshPhysicalMaterial({ color: 0x062a66, roughness: 0.25, clearcoat: 1, envMapIntensity: 1.2 });
+for (const [nombre, [x, z, r, abajo]] of Object.entries(AGUJEROS)) {
+  const g = new THREE.Group();
+  const hueco = new THREE.Mesh(new THREE.CircleGeometry(r, 40), matHueco);
+  hueco.position.z = 0.002;
+  g.add(hueco);
+  const bisel = new THREE.Mesh(new THREE.TorusGeometry(r + 0.018, 0.026, 12, 48), matBisel);
+  g.add(bisel);
+  const matLuz = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffd36a), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  const luz = new THREE.Mesh(new THREE.TorusGeometry(r + 0.05, 0.016, 8, 48), matLuz);
+  luz.position.z = 0.01;
+  g.add(luz);
+  // Relleno de luz dentro del agujero (el "dedo" virtual que lo tapa)
+  const matTapa = new THREE.MeshBasicMaterial({ color: 0xffc848, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+  const tapa = new THREE.Mesh(new THREE.CircleGeometry(r * 0.92, 40), matTapa);
+  tapa.position.z = 0.012;
+  g.add(tapa);
+  if (abajo) {
+    // pulgares (por debajo): se dibujan encima del vidrio, como rayos X, para que se vean a través de la ocarina
+    for (const m of [luz, tapa]) { m.material.depthTest = false; m.renderOrder = 10; }
+  }
+  pegar(g, x, z, !!abajo, -0.002);
+  anillos[nombre] = { luz, tapa, grupo: g, abajo: !!abajo };
+}
+
+// Ondas de sonido que salen de la boquilla (anillos que se abren) y chispas
+const ondas = [];
+for (let i = 0; i < 8; i++) {
+  const m = new THREE.Mesh(new THREE.TorusGeometry(1, 0.008, 8, 96), new THREE.MeshBasicMaterial({
+    color: 0xfff0c8, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  escena.add(m);
+  ondas.push(m);
+}
+const MAX_CHISPAS = 700;
+const geoChispas = new THREE.BufferGeometry();
+geoChispas.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_CHISPAS * 3), 3));
+geoChispas.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAX_CHISPAS * 3), 3));
+const puntoRedondo = (() => {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,255,255,1)');
+  r.addColorStop(0.35, 'rgba(255,255,255,0.6)');
+  r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+})();
+const chispas = new THREE.Points(geoChispas, new THREE.PointsMaterial({
+  size: 0.14, map: puntoRedondo, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+}));
+chispas.frustumCulled = false;
+escena.add(chispas);
+
+const puntosLuces = new THREE.Points(geoLuces, new THREE.PointsMaterial({
+  size: 0.16, map: puntoRedondo, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+}));
+puntosLuces.frustumCulled = false;
+escena.add(puntosLuces);
+
+// Hadas: bolitas de luz con alas de brillo que giran alrededor de la ocarina en órbitas que se cruzan (como un
+// átomo lento) y dejan una estela corta; en el drop giran más rápido
+const HADAS = [
+  { color: 0x9ff8ff, r: 3.2, vel: 0.9, inc: 0.5, fase: 0 },
+  { color: 0xff8ae0, r: 3.6, vel: -0.75, inc: -0.7, fase: 2.1 },
+  { color: 0xffe08a, r: 2.8, vel: 1.1, inc: 1.4, fase: 4.2 },
+];
+const LARGO_ESTELA = 24;
+const geoEstelas = new THREE.BufferGeometry();
+geoEstelas.setAttribute('position', new THREE.BufferAttribute(new Float32Array(HADAS.length * LARGO_ESTELA * 3), 3));
+geoEstelas.setAttribute('color', new THREE.BufferAttribute(new Float32Array(HADAS.length * LARGO_ESTELA * 3), 3));
+const estelas = new THREE.Points(geoEstelas, new THREE.PointsMaterial({
+  size: 0.22, map: puntoRedondo, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+}));
+estelas.frustumCulled = false;
+escena.add(estelas);
+const nucleos = HADAS.map(h => {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: puntoRedondo, color: new THREE.Color(h.color).multiplyScalar(2.2), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+  escena.add(s);
+  return s;
+});
+// Órbita de un hada en el tiempo t (más rápida en el drop: la fase acumula la velocidad extra sin saltos)
+function posHada(h, t, extra) {
+  const a = h.fase + h.vel * (t + extra);
+  const p = new THREE.Vector3(Math.cos(a) * h.r, 0.55 * Math.sin(a * 2.0 + h.fase) , Math.sin(a) * h.r * 0.75);
+  p.applyAxisAngle(new THREE.Vector3(1, 0, 0), h.inc * 0.6);
+  p.applyAxisAngle(new THREE.Vector3(0, 0, 1), h.inc * 0.35);
+  p.y += 0.25 * Math.sin(t * 2.3 + h.fase);
+  return p;
+}
+
+// ------------------------------------------------------------------ capa 2D: pentagrama, símbolos, textos
+const hud = new THREE.Scene();
+const camaraHud = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0, 1);
+const lienzo = document.createElement('canvas');
+lienzo.width = W;
+lienzo.height = H;
+const ctx = lienzo.getContext('2d');
+const texHud = new THREE.CanvasTexture(lienzo);
+texHud.colorSpace = THREE.NoColorSpace;
+texHud.minFilter = THREE.LinearFilter;
+texHud.generateMipmaps = false;
+// Modo "screen": el texto se mezcla encima sin bloom propio (MOTION.md)
+const capaTexto = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false,
+  blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+  blendSrc: THREE.OneMinusDstColorFactor, blendDst: THREE.OneFactor,
+  uniforms: { mapa: { value: texHud } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  // el canvas llega sin premultiplicar: el color se pesa por su alfa, si no lo semitransparente sale blanco
+  fragmentShader: 'uniform sampler2D mapa; varying vec2 vUv; void main(){ vec4 c = texture2D(mapa, vUv); gl_FragColor = vec4(c.rgb * c.a, 1.0); }',
+}));
+capaTexto.renderOrder = 3;
+// Sombra arriba para que el título se lea sobre el bosque
+const sombra = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false,
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: `varying vec2 vUv;
+    void main(){ float y = (1.0 - vUv.y) * 1920.0; gl_FragColor = vec4(0.03, 0.05, 0.08, 0.7 * (1.0 - smoothstep(380.0, 560.0, y))); }`,
+}));
+sombra.renderOrder = 1;
+const destello = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  transparent: true, depthTest: false, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { fuerza: { value: 0 } },
+  vertexShader: 'void main(){ gl_Position = vec4(position.xy * 2.0, 0.0, 1.0); }',
+  fragmentShader: 'uniform float fuerza; void main(){ gl_FragColor = vec4(vec3(0.75, 0.9, 1.0) * fuerza, 1.0); }',
+}));
+destello.renderOrder = 4;
+hud.add(sombra, capaTexto, destello);
+
+// Botón de Switch dibujado por nosotros: L/R = gatillo redondeado, X (y los demás) = botón redondo. Sin halo de
+// fondo: contorno blanco y la letra; el que está sonando lleva un aro dorado
+function boton(nombre, x, y, tam, alfa = 1, activo = 0) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = alfa;
+  const gatillo = nombre === 'L' || nombre === 'R';
+  const trazo = () => {
+    ctx.beginPath();
+    if (gatillo) ctx.roundRect(-tam * 0.78, -tam * 0.4, tam * 1.56, tam * 0.8, tam * 0.36);
+    else ctx.arc(0, 0, tam * 0.47, 0, Math.PI * 2);
+  };
+  if (activo > 0.01) {
+    ctx.strokeStyle = DORADO;
+    for (let i = 4; i >= 1; i--) {
+      ctx.globalAlpha = alfa * 0.13 * activo;
+      ctx.lineWidth = tam * (0.06 + 0.07 * i);
+      trazo();
+      ctx.stroke();
+    }
+    ctx.globalAlpha = alfa;
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  trazo();
+  ctx.fill();
+  ctx.strokeStyle = activo > 0.01 ? '#fff4d6' : BLANCO;
+  ctx.lineWidth = tam * 0.065;
+  trazo();
+  ctx.stroke();
+  ctx.font = nombre.length > 1 ? `600 ${Math.round(tam * 0.32)}px "Avenir Next"` : `bold ${Math.round(tam * 0.46)}px Futura`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = activo > 0.01 ? DORADO : BLANCO;
+  ctx.fillText(nombre, 0, tam * 0.03);
+  ctx.restore();
+}
+
+// Texto limpio con *palabras clave* en dorado, centrado
+function frase(texto, y, tam, alfa) {
+  ctx.font = `600 ${tam}px "Avenir Next"`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  const partes = texto.split(/(\*[^*]+\*)/).filter(Boolean).map(p => ({ txt: p.replace(/\*/g, ''), clave: p.startsWith('*') }));
+  const ancho = partes.reduce((s, p) => s + ctx.measureText(p.txt).width, 0);
+  let x = W / 2 - ancho / 2;
+  ctx.globalAlpha = alfa;
+  for (const p of partes) {
+    ctx.fillStyle = p.clave ? DORADO : BLANCO;
+    ctx.fillText(p.txt, x, y);
+    x += ctx.measureText(p.txt).width;
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ------------------------------------------------------------------ posproceso
+const compositor = new EffectComposer(renderer);
+compositor.addPass(new RenderPass(escena, camara));
+const bokeh = new BokehPass(escena, camara, { focus: 7.0, aperture: 0.0035, maxblur: 0.012 });
+compositor.addPass(bokeh);
+const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 0.6, 0.5, 0.55);
+compositor.addPass(bloom);
+compositor.addPass(new OutputPass());
+const pasoHud = new RenderPass(hud, camaraHud);
+pasoHud.clear = false;
+compositor.addPass(pasoHud);
+compositor.addPass(new ShaderPass(CopyShader));     // el texto se dibuja sobre el búfer; este paso lo lleva a la pantalla
+
+// ------------------------------------------------------------------ utilidades de tiempo
+let D = DEMO;
+const salida = x => 1 - Math.pow(1 - Math.min(Math.max(x, 0), 1), 3);     // ease-out
+const suave = x => { x = Math.min(Math.max(x, 0), 1); return x * x * (3 - 2 * x); };
+const mezcla = (a, b, k) => a + (b - a) * k;
+function seccionEn(t) { return D.secciones.find(s => t >= s.t0 && t < s.t1) || D.secciones[D.secciones.length - 1]; }
+function ultimo(lista, t, clave = x => x) {
+  let r = null;
+  for (const x of lista) { if (clave(x) <= t) r = x; else break; }
+  return r;
+}
+const v3 = new THREE.Vector3();
+function aPantalla(obj) {
+  obj.getWorldPosition(v3);
+  v3.project(camara);
+  return [(v3.x + 1) / 2 * W, (1 - v3.y) / 2 * H, v3.z];
+}
+
+// Cámara: un solo recorrido continuo (sin cortes) que gira alrededor de la ocarina. Cada toma pone puntos de paso
+// en fracciones de su sección: ángulo θ (0 = de frente, + = desde la derecha), distancia r y altura h. Entre puntos
+// se interpola con Catmull-Rom, así la cámara nunca frena en seco. En el paso al drop hay un barrido rápido.
+// Las alturas van bajas (casi a nivel de la ocarina) para que se vean los árboles y las Trifuerzas, no el piso.
+const PASOS_CAMARA = {
+  gancho: [[0, -0.42, 12.6, 0.1], [1, -0.12, 10.6, 0.4]],
+  aprende: [[0.5, 0.1, 9.6, 0.8], [1, 0.2, 9.4, 0.7]],
+  capa: [[0.3, 0.3, 9.8, 0.8], [0.62, 0.5, 9.2, 0.3], [0.88, 0.12, 8.8, 0.6], [1, 0.02, 8.1, 0.3]],
+  bosque: [[0.3, -0.35, 9.6, 0.2], [0.6, -0.6, 9.4, 0.8], [0.88, -0.15, 8.8, 0.4], [1, 0.25, 8.4, 0.6]],
+  drop: [[0.06, -0.32, 10.8, 0.1], [0.4, -0.7, 10.0, 0.6], [0.72, 0.1, 9.4, 0.9], [1, 0.5, 10.2, 0.4]],
+  climax: [[0.25, 0.75, 9.6, 0.3], [0.5, 0.2, 9.0, 0.9], [0.75, -0.55, 9.8, 0.4], [0.92, -0.2, 10.4, 0.7], [1, 0.1, 13.5, 1.4]],
+};
+let RUTA = null;
+function armarRuta() {
+  RUTA = [];
+  for (const sc of D.secciones) {
+    for (const [f, th, r, h] of PASOS_CAMARA[sc.toma] || []) RUTA.push({ t: sc.t0 + f * (sc.t1 - sc.t0), v: [th, r, h] });
+  }
+  RUTA.sort((a, b) => a.t - b.t);
+}
+function enRuta(t) {
+  if (t <= RUTA[0].t) return RUTA[0].v;
+  if (t >= RUTA[RUTA.length - 1].t) return RUTA[RUTA.length - 1].v;
+  let i = 0;
+  while (RUTA[i + 1].t < t) i++;
+  const p0 = RUTA[Math.max(i - 1, 0)].v, p1 = RUTA[i].v, p2 = RUTA[i + 1].v, p3 = RUTA[Math.min(i + 2, RUTA.length - 1)].v;
+  const u = suave((t - RUTA[i].t) / (RUTA[i + 1].t - RUTA[i].t));
+  return p1.map((_, k) => 0.5 * ((2 * p1[k]) + (-p0[k] + p2[k]) * u + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * u * u
+    + (-p0[k] + 3 * p1[k] - 3 * p2[k] + p3[k]) * u * u * u));
+}
+
+window.cargar = (d) => { if (d) D = d; armarRuta(); };
+
+window.dibujar = (t) => {
+  const sec = seccionEn(t);
+  const u = (t - sec.t0) / (sec.t1 - sec.t0);
+  const enDrop = sec.toma === 'drop' || sec.toma === 'climax';
+  const conBase = sec.toma === 'capa' || sec.toma === 'bosque' || enDrop;
+
+  // Latido del kick
+  const k = ultimo(D.kicks, t);
+  const latido = conBase && k !== null ? Math.exp(-(t - k) * 9) : 0;
+
+  // Cámara: recorrido continuo + un vaivén suave de cámara en mano; en el drop un golpecito con cada kick
+  if (!RUTA) armarRuta();
+  const [th, rr, hh] = enRuta(t);
+  camara.position.set(rr * Math.sin(th), hh, rr * Math.cos(th));
+  camara.position.x += 0.08 * Math.sin(t * 0.7) + 0.04 * Math.sin(t * 1.9);
+  camara.position.y += 0.06 * Math.sin(t * 0.9 + 1.3);
+  if (enDrop) camara.position.y += 0.07 * latido;
+  camara.lookAt(-0.1, 0.35 + 0.04 * Math.sin(t * 0.6), 0);
+  camara.rotateZ(0.03 * Math.sin(t * 0.5) + (enDrop ? 0.012 * latido : 0));
+  camara.updateMatrixWorld(true);             // para proyectar símbolos con la cámara de este cuadro
+  bokeh.uniforms.focus.value = camara.position.length();
+
+  // Ocarina: inclinada hacia la cámara para que se lean los agujeros, flota y gira despacio
+  ocarina.rotation.set(0.85 + 0.05 * Math.sin(t * 0.9), -0.12 + 0.16 * Math.sin(t * 0.45), 0.1 + 0.05 * Math.sin(t * 0.7));
+  ocarina.position.y = 0.06 * Math.sin(t * 1.3);
+  ocarina.scale.setScalar(1 + 0.025 * latido);
+  ocarina.updateMatrixWorld(true);
+
+  // Nota que suena y agujeros
+  const nota = ultimo(D.notas, t, n => n.t);
+  const edad = nota ? t - nota.t : 99;
+  const sonando = nota && edad < nota.dur + 0.15;
+  const tapados = sonando ? DIGITACION[midiDe(nota)] : [];
+  for (const [nombre, a] of Object.entries(anillos)) {
+    const on = tapados.includes(nombre);
+    const golpe = on ? Math.exp(-edad * 6) : 0;
+    if (on) a.luz.material.color.set(0xffd36a).multiplyScalar(1.4 + 2.2 * golpe);
+    else a.luz.material.color.set(0x00f0ff).multiplyScalar(a.abajo ? 0 : 0.35 + 0.4 * latido);
+    a.tapa.material.opacity = on ? 0.55 + 0.45 * golpe : 0;
+    a.grupo.scale.setScalar(on ? 1 + 0.25 * golpe : 1);
+  }
+  matEsmalte.emissive.set(0x001030).multiplyScalar(1 + 2.5 * latido);
+  // Fa agudo se toca con todo abierto: no hay agujero que encender, destella todo el borde
+  const todoAbierto = sonando && tapados.length === 0 ? Math.exp(-edad * 3) : 0;
+  uNeon.value = 1 + 1.4 * latido + (enDrop ? 0.3 : 0) + 2.5 * todoAbierto;
+  matFilo.color.set(0x00f0ff).multiplyScalar(1.3 + 1.5 * latido);
+  matOro.emissiveIntensity = 0.15 + (sonando ? 1.2 * Math.exp(-edad * 4) : 0) + 0.5 * latido;
+
+  // Ondas: una por cada nota reciente, salen de la boquilla y se abren
+  salidaSonido.getWorldPosition(v3);
+  const origen = v3.clone();
+  const recientes = D.notas.filter(n => n.t <= t && t - n.t < 1.6).slice(-ondas.length);
+  ondas.forEach((o, i) => {
+    const n = recientes[i];
+    if (!n) { o.material.opacity = 0; return; }
+    const e = (t - n.t) / 1.6;
+    o.position.copy(origen);
+    o.lookAt(camara.position);
+    o.scale.setScalar(0.1 + 0.9 * salida(e));
+    o.material.opacity = 0.45 * (1 - e) * (1 - e);
+  });
+
+  // Chispas que brotan de los agujeros tapados en el drop (tiro parabólico, función de t)
+  const pos = geoChispas.attributes.position.array, col = geoChispas.attributes.color.array;
+  let nCh = 0;
+  if (enDrop) {
+    for (const n of D.notas.filter(n => n.t <= t && t - n.t < 1.2 && n.t >= sec.t0)) {
+      const e = t - n.t;
+      const r = azar(Math.round(n.t * 1000));
+      for (const h of DIGITACION[midiDe(n)]) {
+        anillos[h].grupo.getWorldPosition(v3);
+        for (let j = 0; j < 5 && nCh < MAX_CHISPAS; j++) {
+          const vx = (r() - 0.5) * 3, vy = 1.5 + r() * 2.5, vz = (r() - 0.3) * 2.5;
+          const fr = (1 - Math.exp(-1.8 * e)) / 1.8;
+          pos.set([v3.x + vx * fr, v3.y + vy * fr - 2.2 * e * e, v3.z + vz * fr], nCh * 3);
+          const vida = Math.max(0, 1 - e / 1.2);
+          const c = new THREE.Color(r() < 0.6 ? 0xffc848 : 0x8affc8).lerp(new THREE.Color(1, 1, 1), Math.exp(-e * 5));
+          col.set([c.r * vida, c.g * vida, c.b * vida], nCh * 3);
+          nCh++;
+        }
+      }
+    }
+  }
+  geoChispas.setDrawRange(0, nCh);
+  geoChispas.attributes.position.needsUpdate = true;
+  geoChispas.attributes.color.needsUpdate = true;
+
+  // Destellos del bosque (D.pulsos): al entrar el beat, en cada compás del drop y en el final
+  const tPulso = ultimo(D.pulsos || [], t);
+  const edadP = tPulso !== null ? t - tPulso : 99;
+  const pulso = edadP < 3 ? Math.exp(-edadP * 3.5) : 0;
+  destello.material.uniforms.fuerza.value = 0.05 * pulso;
+  const tDrop = (D.secciones.find(x => x.toma === 'drop') || { t0: 1e9 }).t0;
+  const extra = 0.9 * Math.max(0, t - tDrop);           // las hadas aceleran en el drop sin saltos
+
+  // Anillos de luz en el piso: solo uno por cada destello (los más recientes)
+  const salidas = (D.pulsos || []).filter(x => x <= t && t - x < 3).sort((a, b) => b - a);
+  const valAnillos = piso.material.uniforms.anillos.value;
+  for (let i = 0; i < MAX_ANILLOS; i++) valAnillos[i] = i < salidas.length ? t - salidas[i] : -1;
+
+  // Hadas y sus estelas; la que está más cerca de la boquilla brilla con cada nota
+  const pe = geoEstelas.attributes.position.array, ce = geoEstelas.attributes.color.array;
+  const golpeNota = sonando ? Math.exp(-edad * 5) : 0;
+  HADAS.forEach((h, i) => {
+    const aparece = h.drop ? suave((t - tDrop) / 0.8) : suave(t / 1.2);
+    const c = new THREE.Color(h.color);
+    for (let j = 0; j < LARGO_ESTELA; j++) {
+      const p = posHada(h, t - j * 0.022, Math.max(0, t - j * 0.022 - tDrop) * 0.9);
+      const k = (i * LARGO_ESTELA + j) * 3;
+      pe.set([p.x, p.y, p.z], k);
+      const f = aparece * Math.pow(1 - j / LARGO_ESTELA, 1.6) * 0.9;
+      ce.set([c.r * f, c.g * f, c.b * f], k);
+    }
+    const p = posHada(h, t, extra);
+    nucleos[i].position.copy(p);
+    const brillo = 0.55 + 0.2 * Math.sin(t * 9 + h.fase) + 0.5 * golpeNota * (i % 3 === nota?.midi % 3 ? 1 : 0.3) + 0.5 * pulso;
+    nucleos[i].scale.setScalar(aparece * brillo * 0.55);
+    nucleos[i].material.opacity = aparece;
+  });
+  geoEstelas.attributes.position.needsUpdate = true;
+  geoEstelas.attributes.color.needsUpdate = true;
+
+  // Luciérnagas que vagan y esporas que suben; titilan cada una a su ritmo y se avivan con el destello
+  const pp = geoLuces.attributes.position.array, cp = geoLuces.attributes.color.array;
+  luces.forEach((l, i) => {
+    let x, y, z;
+    if (l.espora) {
+      y = Y_PISO + ((l.y - Y_PISO + t * 0.35 * l.f * 2) % 16);
+      x = l.x + 0.6 * Math.sin(t * 0.3 + l.fase); z = l.z + 0.6 * Math.cos(t * 0.27 + l.fase);
+    } else {
+      x = l.x + 1.6 * Math.sin(t * l.f + l.fase) + 0.6 * Math.sin(t * l.f * 2.3 + l.fase * 2);
+      y = l.y + 0.9 * Math.sin(t * l.f * 1.3 + l.fase * 3);
+      z = l.z + 1.4 * Math.cos(t * l.f * 0.8 + l.fase);
+    }
+    pp.set([x, y, z], i * 3);
+    const tit = l.espora ? 0.35 : Math.pow(0.5 + 0.5 * Math.sin(t * (1.5 + l.f * 4) + l.fase * 7), 3);
+    const f = (0.25 + 0.95 * tit) * (1 + 1.2 * pulso) * suave(t / 1.0 + 0.3);
+    cp.set([l.color.r * f, l.color.g * f, l.color.b * f], i * 3);
+  });
+  geoLuces.attributes.position.needsUpdate = true;
+  geoLuces.attributes.color.needsUpdate = true;
+
+  // Fondo vivo: aurora y estrellas, enredaderas que laten, Trifuerzas, rayos de luna que se mecen, halo del Gran Árbol
+  cielo.material.uniforms.tiempo.value = t;
+  cielo.material.uniforms.pulso.value = pulso;
+  piso.material.uniforms.tiempo.value = t;
+  piso.material.uniforms.pulso.value = pulso;
+  luzPulso.intensity = 6 * pulso + 1.5 * latido;
+  matTriCielo.opacity = 0.07 + 0.05 * latido + 0.25 * pulso;
+  hemi.intensity = 0.5 + 0.5 * pulso;
+  const ola = 0.5 + 0.5 * Math.sin(t * 1.1);
+  matEnredadera.color.set(0x40ffc0).multiplyScalar(0.9 + 0.5 * ola + 1.0 * latido + 2.0 * pulso);
+  matEnredadera2.color.set(0xff50d0).multiplyScalar(0.8 + 0.5 * (1 - ola) + 1.0 * latido + 2.0 * pulso);
+  const brilloTri = 1 + 0.5 * latido + 1.6 * pulso;
+  matTriBorde.color.set(0xffc850).multiplyScalar(1.4 * brilloTri);
+  matTriRelleno.opacity = 0.1 + 0.05 * latido + 0.22 * pulso;
+  // la grande queda siempre detrás de la ocarina, del lado contrario a la cámara (lejos: casi no se nota que la sigue)
+  const thTri = Math.atan2(camara.position.x, camara.position.z) * 0.85;
+  triGrande.position.set(-48 * Math.sin(thTri), 11, -48 * Math.cos(thTri));
+  triGrande.lookAt(camara.position.x, 1, camara.position.z);
+  triGiro.rotation.y = 0.18 * Math.sin(t * 0.3);
+  triGiro.rotation.z = 0.04 * Math.sin(t * 0.21);
+  triGiro.position.y = 0.6 * Math.sin(t * 0.4);
+  for (const pz of piezasTri) {
+    const v = (t * pz.vel + pz.fase) % 16;                 // cada pieza sube 16 unidades y vuelve a empezar
+    const a = Math.min(1, v / 2, (16 - v) / 3);
+    pz.g.position.set(pz.x + 0.6 * Math.sin(t * 0.5 + pz.fase), -4 + v, pz.z);
+    pz.g.rotation.set(0, pz.giro * t + pz.fase, pz.giroZ * t);
+    pz.relleno.opacity = a * (0.12 + 0.2 * pulso);
+    pz.borde.opacity = a;
+    pz.borde.color.set(0xffd060).multiplyScalar(1.3 * brilloTri);
+  }
+  rayosLuna.forEach((m, i) => {
+    m.material.uniforms.fuerza.value = 0.09 + 0.05 * Math.sin(t * 0.5 + i * 1.7) + 0.08 * pulso;
+    m.rotation.z = m.userData.inc + 0.05 * Math.sin(t * 0.35 + i * 2.3);
+  });
+  halo.material.uniforms.fuerza.value = 0.28 + 0.08 * Math.sin(t * 0.8) + 0.3 * pulso + 0.1 * latido;
+  matVentana.color.set(0xffa040).multiplyScalar(2.0 + 0.2 * Math.sin(t * 5.3) * Math.sin(t * 2.1) + 0.4 * latido);
+  bloom.strength = 0.6 + 0.2 * latido + 0.3 * pulso;
+
+  // ---------------------------------------------------------------- capa 2D
+  ctx.clearRect(0, 0, W, H);
+
+  if (sec.toma === 'gancho') {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const a1 = salida(t / 0.4), a2 = salida((t - 0.35) / 0.4), a3 = salida((t - 0.7) / 0.4);
+    ctx.fillStyle = BLANCO;
+    ctx.globalAlpha = a1;
+    ctx.font = 'bold 78px Futura';
+    ctx.fillText(sec.titulo, W / 2, 200 + 12 * (1 - a1));
+    ctx.globalAlpha = a2;
+    ctx.font = '600 52px "Avenir Next"';
+    ctx.fillText(sec.juego, W / 2, 278 + 12 * (1 - a2));
+    ctx.globalAlpha = a3;
+    ctx.fillStyle = DORADO;
+    ctx.font = 'italic 600 58px "Avenir Next"';
+    ctx.fillText(sec.cancion, W / 2, 352 + 12 * (1 - a3));
+    ctx.globalAlpha = 1;
+  }
+
+  // Cinta de notas abajo: botones de Switch (o el nombre de la nota si no tiene botón) que avanzan con la canción;
+  // la que suena va al centro en dorado, las que ya sonaron a la izquierda y las que vienen tenues a la derecha
+  if (sec.fila !== false) {
+    const lista = D.notas;
+    let idx = -1;
+    while (idx + 1 < lista.length && lista[idx + 1].t <= t) idx++;
+    const desliz = idx >= 0 ? salida((t - lista[idx].t) / 0.16) : 1;   // la cinta corre al cambiar de nota
+    const centro = idx - 1 + desliz;
+    const Y = 1330, SEP = 150;
+    const ap = salida(t / 0.4);
+    for (let k = Math.max(0, idx - 4); k <= Math.min(lista.length - 1, idx + 4); k++) {
+      const n = lista[k];
+      const x = W / 2 + (k - centro) * SEP;
+      const borde = 1 - Math.min(Math.max((Math.abs(x - W / 2) - 330) / 160, 0), 1);
+      if (borde <= 0) continue;
+      const e = t - n.t;
+      const sono = e >= 0;
+      const activo = k === idx && e < n.dur + 0.1 ? Math.max(0.35, Math.exp(-e * 3)) : 0;
+      const tam = 90 * (1 + (k === idx ? 0.25 * Math.exp(-e * 10) : 0));
+      const alfa = k === idx ? 1 : sono ? 0.6 : 0.3;
+      boton(n.boton ? BOTONES[n.boton].sw : NOMBRE_NOTA[midiDe(n)], x, Y, tam, ap * borde * alfa, activo);
+    }
+  }
+
+  // Etiqueta junto a los pulgares cuando hay que taparlos (van por debajo de la ocarina)
+  for (const [nombre, a] of Object.entries(anillos)) {
+    if (!a.abajo || !tapados.includes(nombre)) continue;
+    const [px, py] = aPantalla(a.grupo);
+    ctx.globalAlpha = salida(edad / 0.15);
+    ctx.font = '600 30px "Avenir Next"';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = DORADO;
+    ctx.fillText('pulgar', px, py + 52);
+    ctx.globalAlpha = 1;
+  }
+
+  // Botón que sale flotando de la boquilla: solo la nota que está sonando (si no, en los pasajes rápidos se enciman)
+  for (const n of D.notas.filter(n => n.t <= t && t - n.t < 1.1).slice(-1)) {
+    const e = (t - n.t) / 1.1;
+    const [sx, sy] = aPantalla(salidaSonido);
+    const x = Math.max(sx, 110) + 150 * salida(e), y = sy - 60 - 280 * salida(e), tam = 100 * (0.6 + 0.5 * salida(e));
+    if (n.boton) boton(BOTONES[n.boton].sw, x, y, tam, 1 - e * e, 1);
+    else {
+      // nota sin botón en el juego: solo su nombre
+      ctx.globalAlpha = 1 - e * e;
+      ctx.font = `600 ${Math.round(tam * 0.5)}px "Avenir Next"`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = DORADO;
+      ctx.fillText(NOMBRE_NOTA[midiDe(n)], x, y);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  if (sec.texto && sec.toma !== 'gancho') frase(sec.texto, 1470, 50, salida((t - sec.t0 - 0.2) / 0.4));
+  if (sec.capa) {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `bold ${Math.round(100 + 12 * latido)}px Futura`;
+    ctx.fillStyle = BLANCO;
+    ctx.globalAlpha = salida((t - sec.t0) / 0.3);
+    ctx.fillText(sec.capa, W / 2, 560);
+    ctx.globalAlpha = 1;
+  }
+  texHud.needsUpdate = true;
+
+  renderer.clear();
+  compositor.render();
+};
+window.listo = true;
+</script>
+</body>
+</html>

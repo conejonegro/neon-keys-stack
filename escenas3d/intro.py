@@ -6,7 +6,7 @@ título. Los tiempos viven aquí (CFG) y la escena los lee del JSON, así imagen
 
 Uso:
   .venv/bin/python escenas3d/intro.py out/.tmp/intro-sabias-que.json out/.tmp/intro-sabias-que.wav
-  cd escenas3d && node grabar.js escenas/intro.html out/pruebas/intro-sabias-que-prueba.mp4 \\
+  cd escenas3d && node grabar.js escenas/intro.html out/pruebas/datos/intro-sabias-que-prueba.mp4 \\
     --datos out/.tmp/intro-sabias-que.json --audio out/.tmp/intro-sabias-que.wav
 """
 import base64
